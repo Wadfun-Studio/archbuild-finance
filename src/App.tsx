@@ -70,39 +70,6 @@ function Donut({ income, expense }: { income: number; expense: number }) {
   );
 }
 
-function BarChart({ entries }: { entries: Entry[] }) {
-  const months = useMemo(()=>{
-    const map: Record<string,{income:number,expense:number}> = {};
-    entries.forEach(e=>{ const m=String(e.date).slice(0,7); if(!map[m]) map[m]={income:0,expense:0}; map[m][e.type as "income"|"expense"]+=e.amount; });
-    return Object.entries(map).sort(([a],[b])=>a.localeCompare(b)).slice(-6);
-  },[entries]);
-  if (!months.length) return <div style={{ color:"#bbb", fontSize:13 }}>ยังไม่มีข้อมูล</div>;
-  const mx=Math.max(...months.flatMap(([,v])=>[v.income,v.expense]),1), H=100;
-  return (
-    <div style={{ overflowX:"auto" }}>
-      <div style={{ display:"flex", alignItems:"flex-end", gap:12, minWidth:months.length*60 }}>
-        {months.map(([m,v])=>{
-          const [yr,mo]=m.split("-");
-          return (
-            <div key={m} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
-              <div style={{ display:"flex", alignItems:"flex-end", gap:3, height:H }}>
-                <div style={{ width:14, height:Math.max(4,(v.income/mx)*H), background:"linear-gradient(to top,#2e7d32,#66bb6a)", borderRadius:"3px 3px 0 0" }}/>
-                <div style={{ width:14, height:Math.max(4,(v.expense/mx)*H), background:"linear-gradient(to top,#c62828,#ef5350)", borderRadius:"3px 3px 0 0" }}/>
-              </div>
-              <div style={{ fontSize:9, color:"#aaa" }}>{new Date(+yr,+mo-1).toLocaleDateString("th-TH",{month:"short"})}</div>
-            </div>
-          );
-        })}
-      </div>
-      <div style={{ display:"flex", gap:12, marginTop:10, fontSize:11, color:"#888" }}>
-        {[{c:"#66bb6a",l:"รายรับ"},{c:"#ef5350",l:"รายจ่าย"}].map(x=>(
-          <span key={x.l} style={{ display:"flex", alignItems:"center", gap:4 }}><span style={{ width:9, height:9, background:x.c, borderRadius:2, display:"inline-block" }}/>{x.l}</span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
@@ -323,6 +290,26 @@ export default function App() {
   // Near-due / overdue payables (3-day window)
   const urgentPayables = useMemo(()=>installments.filter(i=>i.kind==="payable"&&i.status==="pending"&&daysUntil(i.dueDate)<=3),[installments]);
 
+  // 3-month cash flow forecast from pending installments (current month + next 2)
+  const cashFlowForecast = useMemo(()=>{
+    const now = new Date();
+    const months: { key:string; label:string; inflow:number; outflow:number }[] = [];
+    for (let i=0; i<3; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth()+i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      const label = d.toLocaleDateString("th-TH",{month:"short",year:"2-digit"});
+      months.push({ key, label, inflow:0, outflow:0 });
+    }
+    installments.filter(i=>i.status==="pending").forEach(inst=>{
+      const monthKey = String(inst.dueDate).slice(0,7);
+      const m = months.find(x=>x.key===monthKey);
+      if (!m) return;
+      if (inst.kind==="receivable") m.inflow += inst.amount;
+      else m.outflow += inst.amount;
+    });
+    return months;
+  },[installments]);
+
   // VAT due notification on the 15th
   useEffect(() => {
     if (!notifGranted) return;
@@ -521,8 +508,50 @@ export default function App() {
             </div>
 
             <div className="card" style={{ padding:20 }}>
-              <div className="stitle">รายรับ-จ่ายรายเดือน</div>
-              <BarChart entries={entries}/>
+              <div className="stitle">🔮 Cash Flow Forecast (3 เดือนข้างหน้า)</div>
+              <div style={{ fontSize:11,color:"#aaa",marginTop:-8,marginBottom:12 }}>คาดการณ์จากงวดเบิก/งวดจ่ายที่ยังค้าง</div>
+              {(()=>{
+                const totalIn = cashFlowForecast.reduce((s,m)=>s+m.inflow,0);
+                const totalOut = cashFlowForecast.reduce((s,m)=>s+m.outflow,0);
+                if (totalIn===0&&totalOut===0) return (
+                  <div style={{ color:"#bbb",fontSize:13,textAlign:"center",padding:"20px 0" }}>ยังไม่มีงวดค้างใน 3 เดือนข้างหน้า</div>
+                );
+                let running = 0;
+                return (
+                  <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+                    {cashFlowForecast.map(m=>{
+                      const net = m.inflow - m.outflow;
+                      running += net;
+                      const isNeg = net < 0;
+                      return (
+                        <div key={m.key} style={{ background:isNeg?"#ffebee":"#f5f9ff",border:`1.5px solid ${isNeg?"#ef9a9a":"#cdd9f0"}`,borderRadius:12,padding:"12px 14px" }}>
+                          <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8 }}>
+                            <span style={{ fontWeight:800,fontSize:14,color:isNeg?"#c62828":"#1565c0" }}>{m.label}</span>
+                            <span style={{ fontSize:12,color:"#888" }}>สะสม <b style={{ color:running<0?"#c62828":"#1565c0" }}>฿{fmt(running)}</b></span>
+                          </div>
+                          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,fontSize:12 }}>
+                            <div>
+                              <div style={{ color:"#777",fontSize:10 }}>คาดรับ</div>
+                              <div style={{ fontWeight:700,color:"#2e7d32" }}>+฿{fmt(m.inflow)}</div>
+                            </div>
+                            <div>
+                              <div style={{ color:"#777",fontSize:10 }}>คาดจ่าย</div>
+                              <div style={{ fontWeight:700,color:"#c62828" }}>-฿{fmt(m.outflow)}</div>
+                            </div>
+                            <div style={{ textAlign:"right" }}>
+                              <div style={{ color:"#777",fontSize:10 }}>สุทธิ</div>
+                              <div style={{ fontWeight:800,color:isNeg?"#c62828":"#2e7d32" }}>{isNeg?"":"+"}฿{fmt(net)}</div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {cashFlowForecast.some(m=>m.inflow-m.outflow<0)&&(
+                      <div style={{ fontSize:11,color:"#c62828",fontWeight:600,marginTop:2 }}>⚠️ มีเดือนที่คาดว่าเงินติดลบ — เตรียมกระแสเงินสด</div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Cash Flow table */}
@@ -874,24 +903,54 @@ export default function App() {
                         <span style={{ color:pNet>=0?"#1565c0":"#c62828",fontWeight:800,marginLeft:"auto" }}>{pNet>=0?"กำไร":"ขาดทุน"} {pNet>=0?"+":"-"}฿{fmt(Math.abs(pNet))}</span>
                       </div>
                     </button>
-                    {!stmtCollapsed&&(
-                      <div style={{ padding:"4px 16px 12px" }}>
-                        {projEntries.length===0?<div style={{ fontSize:13,color:"#ccc",textAlign:"center",padding:"20px 0" }}>ยังไม่มีรายการในโครงการนี้</div>
-                        :projEntries.map((e,i)=>(
-                          <div key={e.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:i<projEntries.length-1?"1px solid #f5f5f5":"none" }}>
-                            <div style={{ width:34,height:34,borderRadius:10,background:e.type==="income"?"#e8f5e9":"#ffebee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0 }}>{e.type==="income"?"↑":"↓"}</div>
-                            <div style={{ flex:1,minWidth:0 }}>
-                              <div style={{ fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.description}</div>
-                              <div style={{ fontSize:11,color:"#bbb",marginTop:2 }}>{e.category} · {fmtDate(String(e.date).slice(0,10))}</div>
+                    {!stmtCollapsed&&(()=>{
+                      const incList = projEntries.filter(e=>e.type==="income");
+                      const expList = projEntries.filter(e=>e.type==="expense");
+                      if (projEntries.length===0) return (
+                        <div style={{ padding:"4px 16px 12px" }}>
+                          <div style={{ fontSize:13,color:"#ccc",textAlign:"center",padding:"20px 0" }}>ยังไม่มีรายการในโครงการนี้</div>
+                        </div>
+                      );
+                      const column = (list: Entry[], total: number, side: "inc"|"exp") => {
+                        const isInc = side==="inc";
+                        const color = isInc ? "#2e7d32" : "#c62828";
+                        const bg = isInc ? "#e8f5e9" : "#ffebee";
+                        return (
+                          <div style={{ background:"#fff",borderRadius:10,overflow:"hidden",border:`1px solid ${bg}` }}>
+                            <div style={{ background:bg,padding:"8px 10px",fontSize:12,fontWeight:800,color,display:"flex",justifyContent:"space-between" }}>
+                              <span>{isInc?"↑ รายรับ":"↓ รายจ่าย"}</span>
+                              <span>{list.length}</span>
                             </div>
-                            <div style={{ textAlign:"right",flexShrink:0 }}>
-                              <div style={{ fontWeight:800,fontSize:14,color:e.type==="income"?"#2e7d32":"#c62828" }}>{e.type==="income"?"+":"-"}฿{fmt(e.amount)}</div>
-                              {(e.vat||e.wht)?<div style={{ fontSize:10,color:"#aaa" }}>{e.vat?`VAT ฿${fmt(e.vat)} `:""}{e.wht?`หัก ฿${fmt(e.wht)}`:""}</div>:null}
+                            <div style={{ padding:"4px 10px",minHeight:60 }}>
+                              {list.length===0?<div style={{ fontSize:11,color:"#ccc",textAlign:"center",padding:"16px 0" }}>—</div>
+                              :list.map((e,i)=>(
+                                <div key={e.id} style={{ padding:"8px 0",borderBottom:i<list.length-1?"1px solid #f5f5f5":"none" }}>
+                                  <div style={{ fontSize:10,color:"#999" }}>{fmtDate(String(e.date).slice(0,10))} · {e.category}</div>
+                                  <div style={{ fontSize:12,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:1 }}>{e.description}</div>
+                                  <div style={{ fontSize:13,fontWeight:800,color,marginTop:2 }}>{isInc?"+":"-"}฿{fmt(e.amount)}</div>
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{ background:bg,padding:"8px 10px",fontSize:12,fontWeight:800,color,display:"flex",justifyContent:"space-between",borderTop:`1px solid ${color}22` }}>
+                              <span>รวม</span>
+                              <span>{isInc?"+":"-"}฿{fmt(total)}</span>
                             </div>
                           </div>
-                        ))}
-                      </div>
-                    )}
+                        );
+                      };
+                      return (
+                        <div style={{ padding:"10px 12px 14px" }}>
+                          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8 }}>
+                            {column(incList, pIncome, "inc")}
+                            {column(expList, pExpense, "exp")}
+                          </div>
+                          <div style={{ marginTop:12,padding:"12px 14px",borderRadius:10,background:pNet>=0?"linear-gradient(135deg,#e8eaf6,#f3f4ff)":"linear-gradient(135deg,#ffebee,#fce4ec)",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                            <span style={{ fontSize:13,fontWeight:700 }}>{pNet>=0?"📈 กำไรสุทธิ":"📉 ขาดทุนสุทธิ"}</span>
+                            <span style={{ fontSize:18,fontWeight:800,color:pNet>=0?"#1565c0":"#c62828" }}>{pNet>=0?"+":"-"}฿{fmt(Math.abs(pNet))}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}
