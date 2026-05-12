@@ -83,6 +83,7 @@ function buildDocHTML(opts: {
   dateStr: string;
   customerName: string;
   itemName: string;
+  description?: string;
   amount: number;
   hasVat?: boolean;
   hasWht?: boolean;
@@ -150,11 +151,14 @@ function buildDocHTML(opts: {
     </thead>
     <tbody>
       <tr>
-        <td style="padding:8px;border:1px solid #ccc;text-align:center;">1</td>
-        <td style="padding:8px;border:1px solid #ccc;">${opts.itemName} — โครงการ ${opts.customerName}</td>
-        <td style="padding:8px;border:1px solid #ccc;text-align:center;">1</td>
-        <td style="padding:8px;border:1px solid #ccc;text-align:right;">${fmt(opts.amount)}</td>
-        <td style="padding:8px;border:1px solid #ccc;text-align:right;">${fmt(opts.amount)}</td>
+        <td style="padding:8px;border:1px solid #ccc;text-align:center;vertical-align:top;">1</td>
+        <td style="padding:8px;border:1px solid #ccc;vertical-align:top;">
+          ${opts.description ? `<div style="white-space:pre-wrap;line-height:1.45;">${opts.description.replace(/</g,"&lt;")}</div>` : `${opts.itemName} — โครงการ ${opts.customerName}`}
+          ${opts.description ? `<div style="color:#888;font-size:11px;margin-top:4px;">โครงการ ${opts.customerName} · ${opts.itemName}</div>` : ""}
+        </td>
+        <td style="padding:8px;border:1px solid #ccc;text-align:center;vertical-align:top;">1</td>
+        <td style="padding:8px;border:1px solid #ccc;text-align:right;vertical-align:top;">${fmt(opts.amount)}</td>
+        <td style="padding:8px;border:1px solid #ccc;text-align:right;vertical-align:top;">${fmt(opts.amount)}</td>
       </tr>
       ${Array.from({length:6}).map(()=>`
       <tr>
@@ -221,6 +225,7 @@ async function generateDocPDF(kind: "invoice"|"receipt", opts: {
   docNo: string;
   customerName: string;
   itemName: string;
+  description?: string;
   amount: number;
   hasVat?: boolean;
   hasWht?: boolean;
@@ -284,9 +289,9 @@ interface Entry { id: number; date: string; type: string; category: string; proj
 type InstKind = "receivable"|"payable";
 type InstStatus = "pending"|"received"|"paid";
 interface ProjectTaxSettings { hasVat: boolean; hasWht: boolean; whtRate: number; }
-interface Installment { id: number; kind: InstKind; project: string; name: string; amount: number; dueDate: string; status: InstStatus; invoiceNo?: string; receiptNo?: string; hasVat?: boolean; hasWht?: boolean; whtRate?: number; }
+interface Installment { id: number; kind: InstKind; project: string; name: string; description?: string; amount: number; dueDate: string; status: InstStatus; invoiceNo?: string; receiptNo?: string; hasVat?: boolean; hasWht?: boolean; whtRate?: number; }
 interface FormState { date: string; type: string; category: string; project: string; description: string; amount: string; useVat: boolean; useWht: boolean; }
-interface InstForm { kind: InstKind; project: string; name: string; amount: string; dueDate: string; }
+interface InstForm { kind: InstKind; project: string; name: string; description: string; amount: string; dueDate: string; }
 
 const defaultTaxSettings: ProjectTaxSettings = { hasVat: false, hasWht: false, whtRate: 3 };
 
@@ -347,7 +352,7 @@ export default function App() {
   const [newProj, setNewProj] = useState("");
   const [toast, setToast] = useState<{msg:string,type:string}|null>(null);
   const [showInstForm, setShowInstForm] = useState(false);
-  const [instForm, setInstForm] = useState<InstForm>({ kind:"receivable", project:"", name:"งวดที่ 1", amount:"", dueDate:"" });
+  const [instForm, setInstForm] = useState<InstForm>({ kind:"receivable", project:"", name:"งวดที่ 1", description:"", amount:"", dueDate:"" });
   const [instTab, setInstTab] = useState<InstKind>("receivable");
   const [showTaxSummary, setShowTaxSummary] = useState(false);
   const [notifGranted, setNotifGranted] = useState(false);
@@ -439,10 +444,10 @@ export default function App() {
   function addInstallment() {
     if (!instForm.project || !instForm.name || !instForm.amount || !instForm.dueDate) { showToast("กรอกข้อมูลให้ครบ", "err"); return; }
     const t = getProjectTax(instForm.project);
-    const newInst: Installment = { id: Date.now(), kind: instForm.kind, project: instForm.project, name: instForm.name, amount: +instForm.amount, dueDate: instForm.dueDate, status: "pending", hasVat: t.hasVat, hasWht: t.hasWht, whtRate: t.whtRate };
+    const newInst: Installment = { id: Date.now(), kind: instForm.kind, project: instForm.project, name: instForm.name, description: instForm.description.trim() || undefined, amount: +instForm.amount, dueDate: instForm.dueDate, status: "pending", hasVat: t.hasVat, hasWht: t.hasWht, whtRate: t.whtRate };
     saveInstallments([...installments, newInst]);
     setShowInstForm(false);
-    setInstForm({ kind: instForm.kind, project: projects[0]||"", name:"งวดที่ 1", amount:"", dueDate:"" });
+    setInstForm({ kind: instForm.kind, project: projects[0]||"", name:"งวดที่ 1", description:"", amount:"", dueDate:"" });
     showToast(`เพิ่ม${instLabel(instForm.kind)}แล้ว`);
   }
 
@@ -459,7 +464,7 @@ export default function App() {
     }
     showToast("กำลังสร้างใบวางบิล...");
     try {
-      await generateDocPDF("invoice", { docNo: invoiceNo, customerName: inst.project, itemName: inst.name, amount: inst.amount, hasVat: inst.hasVat, hasWht: inst.hasWht, whtRate: inst.whtRate });
+      await generateDocPDF("invoice", { docNo: invoiceNo, customerName: inst.project, itemName: inst.name, description: inst.description, amount: inst.amount, hasVat: inst.hasVat, hasWht: inst.hasWht, whtRate: inst.whtRate });
       showToast("สร้างใบวางบิลสำเร็จ");
     } catch (e) { console.error(e); showToast("สร้าง PDF ไม่สำเร็จ", "err"); }
   }
@@ -472,7 +477,7 @@ export default function App() {
     }
     showToast("กำลังสร้างใบเสร็จ...");
     try {
-      await generateDocPDF("receipt", { docNo: receiptNo, customerName: inst.project, itemName: inst.name, amount: inst.amount, hasVat: inst.hasVat, hasWht: inst.hasWht, whtRate: inst.whtRate });
+      await generateDocPDF("receipt", { docNo: receiptNo, customerName: inst.project, itemName: inst.name, description: inst.description, amount: inst.amount, hasVat: inst.hasVat, hasWht: inst.hasWht, whtRate: inst.whtRate });
       showToast("สร้างใบเสร็จสำเร็จ");
     } catch (e) { console.error(e); showToast("สร้าง PDF ไม่สำเร็จ", "err"); }
   }
@@ -1188,7 +1193,7 @@ export default function App() {
                 </div>
               </div>
 
-              <button className="btn" style={{ width:"100%",padding:14,fontSize:15,background:accent,color:"#fff" }} onClick={()=>{ setInstForm({kind:instTab,project:proj,name:`${instLabel(instTab)}ที่ ${tabList.length+1}`,amount:"",dueDate:""}); setShowInstForm(true); }}>
+              <button className="btn" style={{ width:"100%",padding:14,fontSize:15,background:accent,color:"#fff" }} onClick={()=>{ setInstForm({kind:instTab,project:proj,name:`${instLabel(instTab)}ที่ ${tabList.length+1}`,description:"",amount:"",dueDate:""}); setShowInstForm(true); }}>
                 + เพิ่ม{instLabel(instTab)}สำหรับโครงการนี้
               </button>
 
@@ -1206,6 +1211,9 @@ export default function App() {
                         {done?`✅ ${instDoneLabel(inst.kind)}`:`⏳ ${instPendingLabel(inst.kind)}`}
                       </span>
                     </div>
+                    {inst.description&&(
+                      <div style={{ fontSize:12,color:"#555",marginBottom:6,padding:"6px 10px",background:"#fafbff",borderRadius:8,whiteSpace:"pre-wrap",lineHeight:1.4 }}>{inst.description}</div>
+                    )}
                     <div style={{ fontSize:18,fontWeight:800,color:accent,marginBottom:4 }}>
                       {inst.kind==="payable"?"-":"+"}฿{fmt(inst.amount)}
                     </div>
@@ -1356,21 +1364,38 @@ export default function App() {
               {/* Tax options */}
               <div>
                 <label style={{ fontSize:12,color:"#aaa",fontWeight:700,display:"block",marginBottom:8 }}>ภาษี</label>
-                <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-                  <label className="checkbox-row">
-                    <input type="checkbox" checked={form.useVat} onChange={e=>setForm(f=>({...f,useVat:e.target.checked}))}/>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:14,fontWeight:600 }}>VAT 7%</div>
-                      {form.useVat&&form.amount&&<div style={{ fontSize:12,color:"#e65100" }}>= ฿{fmt(+form.amount*VAT_RATE)}</div>}
-                    </div>
-                  </label>
-                  <label className="checkbox-row">
-                    <input type="checkbox" checked={form.useWht} onChange={e=>setForm(f=>({...f,useWht:e.target.checked}))}/>
-                    <div style={{ flex:1 }}>
-                      <div style={{ fontSize:14,fontWeight:600 }}>หัก ณ ที่จ่าย 3%</div>
-                      {form.useWht&&form.amount&&<div style={{ fontSize:12,color:"#c62828" }}>= ฿{fmt(+form.amount*WHT_RATE)}</div>}
-                    </div>
-                  </label>
+                <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+                  {([
+                    { key:"useVat" as const, label:"VAT 7%", checked:form.useVat, rate:VAT_RATE, rateColor:"#e65100" },
+                    { key:"useWht" as const, label:"หัก ณ ที่จ่าย 3%", checked:form.useWht, rate:WHT_RATE, rateColor:"#c62828" },
+                  ]).map(opt=>(
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={()=>setForm(f=>({ ...f, [opt.key]: !opt.checked }))}
+                      style={{
+                        display:"flex",alignItems:"center",gap:14,padding:"14px 16px",
+                        background:opt.checked?"#e8f5e9":"#f8f9ff",
+                        border:`2px solid ${opt.checked?"#2e7d32":"#e0e4f0"}`,
+                        borderRadius:12,cursor:"pointer",fontFamily:"inherit",textAlign:"left",
+                        width:"100%",minHeight:56,WebkitTapHighlightColor:"transparent",
+                        transition:"background .15s,border-color .15s",
+                      }}
+                    >
+                      <div style={{
+                        width:30,height:30,borderRadius:8,flexShrink:0,
+                        background:opt.checked?"#2e7d32":"#fff",
+                        border:`2px solid ${opt.checked?"#2e7d32":"#bbb"}`,
+                        display:"flex",alignItems:"center",justifyContent:"center",
+                        color:"#fff",fontSize:20,fontWeight:800,lineHeight:1,
+                        boxShadow:opt.checked?"0 2px 6px rgba(46,125,50,.3)":"none",
+                      }}>{opt.checked?"✓":""}</div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:15,fontWeight:700,color:opt.checked?"#1b5e20":"#333" }}>{opt.label}</div>
+                        {opt.checked&&form.amount&&<div style={{ fontSize:13,color:opt.rateColor,marginTop:2,fontWeight:600 }}>= ฿{fmt(+form.amount*opt.rate)}</div>}
+                      </div>
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -1420,6 +1445,7 @@ export default function App() {
               {[
                 {label:"โครงการ",el:<select value={instForm.project} onChange={e=>setInstForm(f=>({...f,project:e.target.value}))}>{projects.map(p=><option key={p}>{p}</option>)}</select>},
                 {label:"ชื่องวด เช่น งวดที่ 1",el:<input type="text" placeholder="งวดที่ 1" value={instForm.name} onChange={e=>setInstForm(f=>({...f,name:e.target.value}))}/>},
+                {label:"รายละเอียด (จะใช้แสดงในใบวางบิล/ใบเสร็จ)",el:<textarea placeholder={instForm.kind==="payable"?"เช่น งานก่อสร้างฐานราก งวดที่ 1":"เช่น ค่าจ้างออกแบบและควบคุมงาน งวดที่ 1"} value={instForm.description} onChange={e=>setInstForm(f=>({...f,description:e.target.value}))} rows={3} style={{ resize:"vertical",minHeight:80,lineHeight:1.5 }}/>},
                 {label:"ยอดเงินงวด (บาท)",el:<input type="number" inputMode="decimal" placeholder="0.00" value={instForm.amount} onChange={e=>setInstForm(f=>({...f,amount:e.target.value}))}/>},
                 {label:instForm.kind==="payable"?"วันครบกำหนดจ่าย":"วันครบกำหนดเบิก",el:<input type="date" value={instForm.dueDate} onChange={e=>setInstForm(f=>({...f,dueDate:e.target.value}))}/>},
               ].map(({label,el})=>(
