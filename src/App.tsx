@@ -292,7 +292,7 @@ export default function App() {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ width: 36, height: 36, background: "linear-gradient(135deg,#1565c0,#42a5f5)", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🏗️</div>
               <div>
-                <div style={{ fontWeight: 800, fontSize: 15, letterSpacing: "-.02em" }}>ArchBuild Finance</div>
+                <div style={{ fontWeight: 800, fontSize: 15, letterSpacing: "-.02em" }}>Wadfun Finance</div>
                 <div style={{ fontSize: 10, color: "#bbb" }}>ระบบบัญชีรายรับ-รายจ่าย</div>
               </div>
             </div>
