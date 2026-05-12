@@ -580,13 +580,23 @@ export default function App() {
     });
   },[entries]);
 
-  // VAT due based on 15th-of-next-month filing rule
+  // All-time tax breakdown split by side
+  const taxBreakdown = useMemo(()=>{
+    const outputVat = entries.filter(e=>e.type==="income").reduce((s,e)=>s+(e.vat||0),0);
+    const inputVat  = entries.filter(e=>e.type==="expense").reduce((s,e)=>s+(e.vat||0),0);
+    const whtCredit = entries.filter(e=>e.type==="income").reduce((s,e)=>s+(e.wht||0),0);
+    const whtRemit  = entries.filter(e=>e.type==="expense").reduce((s,e)=>s+(e.wht||0),0);
+    return {
+      outputVat, inputVat, vatNet: outputVat - inputVat,
+      whtCredit, whtRemit, whtNet: whtRemit - whtCredit,
+    };
+  },[entries]);
+
+  // VAT due based on 15th-of-next-month filing rule (Output - Input for target month)
   const vatDueInfo = useMemo(()=>{
     const now = new Date();
     const day = now.getDate();
-    // VAT for month M is due by 15th of M+1.
-    // If today is before 15th of current month, you still owe VAT for previous month (due this 15).
-    // If today is on/after 15th, the next batch (current month) is filed by 15th next month.
+    // VAT for month M is filed by 15th of M+1.
     const beforeCutoff = day < 15;
     const targetMonth = beforeCutoff
       ? new Date(now.getFullYear(), now.getMonth()-1, 1)
@@ -595,9 +605,16 @@ export default function App() {
       ? new Date(now.getFullYear(), now.getMonth(), 15)
       : new Date(now.getFullYear(), now.getMonth()+1, 15);
     const monthStr = `${targetMonth.getFullYear()}-${String(targetMonth.getMonth()+1).padStart(2,"0")}`;
-    const amount = entries.filter(e=>String(e.date).slice(0,7)===monthStr).reduce((s,e)=>s+(e.vat||0),0);
+    const mEntries = entries.filter(e=>String(e.date).slice(0,7)===monthStr);
+    const outputVat = mEntries.filter(e=>e.type==="income").reduce((s,e)=>s+(e.vat||0),0);
+    const inputVat  = mEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+(e.vat||0),0);
+    const whtCredit = mEntries.filter(e=>e.type==="income").reduce((s,e)=>s+(e.wht||0),0);
+    const whtRemit  = mEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+(e.wht||0),0);
+    const vatNet = outputVat - inputVat;
+    const vatRemit = Math.max(0, vatNet); // negative = refundable, no remit due
+    const totalRemit = vatRemit + whtRemit;
     const daysToDue = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
-    return { monthStr, dueDate, daysToDue, amount, isDueToday: day===15 };
+    return { monthStr, dueDate, daysToDue, outputVat, inputVat, vatNet, vatRemit, whtCredit, whtRemit, totalRemit, isDueToday: day===15 };
   },[entries]);
 
   // Near-due / overdue payables (3-day window)
@@ -626,9 +643,9 @@ export default function App() {
   // VAT due notification on the 15th
   useEffect(() => {
     if (!notifGranted) return;
-    if (!vatDueInfo.isDueToday || vatDueInfo.amount <= 0) return;
-    new Notification("🧾 วันนี้ครบกำหนดยื่น VAT", {
-      body: `VAT เดือน ${vatDueInfo.monthStr} — ต้องนำส่ง ฿${fmt(vatDueInfo.amount)}`,
+    if (!vatDueInfo.isDueToday || vatDueInfo.totalRemit <= 0) return;
+    new Notification("🧾 วันนี้ครบกำหนดยื่นภาษี", {
+      body: `เดือน ${vatDueInfo.monthStr} — นำส่ง VAT ฿${fmt(vatDueInfo.vatRemit)} + WHT ฿${fmt(vatDueInfo.whtRemit)} = ฿${fmt(vatDueInfo.totalRemit)}`,
       icon: "/favicon.ico"
     });
   }, [notifGranted, vatDueInfo]);
@@ -746,16 +763,20 @@ export default function App() {
             )}
 
             {/* VAT due alert */}
-            {vatDueInfo.amount>0&&(
+            {(vatDueInfo.totalRemit>0||vatDueInfo.vatNet<0)&&(
               <div style={{ background:vatDueInfo.isDueToday?"#ffebee":vatDueInfo.daysToDue<=3?"#fff3e0":"#e3f2fd",border:`1.5px solid ${vatDueInfo.isDueToday?"#ef9a9a":vatDueInfo.daysToDue<=3?"#ffb74d":"#90caf9"}`,borderRadius:14,padding:"12px 16px" }}>
-                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:10 }}>
-                  <div style={{ minWidth:0 }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10 }}>
+                  <div style={{ minWidth:0,flex:1 }}>
                     <div style={{ fontWeight:700,fontSize:13,color:vatDueInfo.isDueToday?"#c62828":vatDueInfo.daysToDue<=3?"#e65100":"#0d47a1" }}>
-                      🧾 {vatDueInfo.isDueToday?"วันนี้ครบกำหนดยื่น VAT!":`ครบกำหนดยื่น VAT ใน ${vatDueInfo.daysToDue} วัน`}
+                      🧾 {vatDueInfo.isDueToday?"วันนี้ครบกำหนดยื่นภาษี!":`ครบกำหนดยื่นภาษี ใน ${vatDueInfo.daysToDue} วัน`}
                     </div>
-                    <div style={{ fontSize:11,color:"#666",marginTop:3 }}>VAT เดือน {vatDueInfo.monthStr} · กำหนดยื่น {fmtDate(vatDueInfo.dueDate.toISOString().slice(0,10))}</div>
+                    <div style={{ fontSize:11,color:"#666",marginTop:3 }}>เดือน {vatDueInfo.monthStr} · กำหนดยื่น {fmtDate(vatDueInfo.dueDate.toISOString().slice(0,10))}</div>
+                    <div style={{ fontSize:11,color:"#666",marginTop:4 }}>VAT สุทธิ {vatDueInfo.vatNet>=0?"+":""}฿{fmt(vatDueInfo.vatNet)} · WHT นำส่ง ฿{fmt(vatDueInfo.whtRemit)}</div>
                   </div>
-                  <div style={{ fontSize:18,fontWeight:800,color:"#e65100",whiteSpace:"nowrap" }}>฿{fmt(vatDueInfo.amount)}</div>
+                  <div style={{ textAlign:"right",whiteSpace:"nowrap" }}>
+                    <div style={{ fontSize:10,color:"#888",fontWeight:600 }}>นำส่ง</div>
+                    <div style={{ fontSize:18,fontWeight:800,color:"#e65100" }}>฿{fmt(vatDueInfo.totalRemit)}</div>
+                  </div>
                 </div>
               </div>
             )}
@@ -800,18 +821,32 @@ export default function App() {
             {/* Tax summary card */}
             <div className="card" style={{ padding:16 }}>
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
-                <div className="stitle" style={{ margin:0 }}>สรุปภาษี</div>
+                <div className="stitle" style={{ margin:0 }}>สรุปภาษี (สะสม)</div>
                 <button className="btn btn-ghost" style={{ fontSize:12,padding:"6px 10px" }} onClick={()=>setShowTaxSummary(true)}>ดูรายละเอียด</button>
               </div>
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+                <div style={{ background:"#e3f2fd",borderRadius:10,padding:12 }}>
+                  <div style={{ fontSize:10,color:"#0d47a1",marginBottom:3,fontWeight:700 }}>Output VAT (ขาย)</div>
+                  <div style={{ fontSize:15,fontWeight:800,color:"#0d47a1" }}>฿{fmt(taxBreakdown.outputVat)}</div>
+                </div>
                 <div style={{ background:"#fff3e0",borderRadius:10,padding:12 }}>
-                  <div style={{ fontSize:11,color:"#e65100",marginBottom:3,fontWeight:600 }}>VAT 7%</div>
-                  <div style={{ fontSize:16,fontWeight:800,color:"#e65100" }}>฿{fmt(totalVat)}</div>
+                  <div style={{ fontSize:10,color:"#e65100",marginBottom:3,fontWeight:700 }}>Input VAT (ซื้อ)</div>
+                  <div style={{ fontSize:15,fontWeight:800,color:"#e65100" }}>฿{fmt(taxBreakdown.inputVat)}</div>
+                </div>
+                <div style={{ background:"#ede7f6",borderRadius:10,padding:12 }}>
+                  <div style={{ fontSize:10,color:"#4527a0",marginBottom:3,fontWeight:700 }}>WHT ถูกหัก (เครดิต)</div>
+                  <div style={{ fontSize:15,fontWeight:800,color:"#4527a0" }}>฿{fmt(taxBreakdown.whtCredit)}</div>
                 </div>
                 <div style={{ background:"#fce4ec",borderRadius:10,padding:12 }}>
-                  <div style={{ fontSize:11,color:"#c62828",marginBottom:3,fontWeight:600 }}>หัก ณ ที่จ่าย 3%</div>
-                  <div style={{ fontSize:16,fontWeight:800,color:"#c62828" }}>฿{fmt(totalWht)}</div>
+                  <div style={{ fontSize:10,color:"#c62828",marginBottom:3,fontWeight:700 }}>WHT หักจ่าย (นำส่ง)</div>
+                  <div style={{ fontSize:15,fontWeight:800,color:"#c62828" }}>฿{fmt(taxBreakdown.whtRemit)}</div>
                 </div>
+              </div>
+              <div style={{ marginTop:10,padding:"10px 12px",background:taxBreakdown.vatNet>=0?"#fff8e1":"#e8f5e9",borderRadius:10,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                <span style={{ fontSize:12,fontWeight:700,color:taxBreakdown.vatNet>=0?"#827717":"#1b5e20" }}>VAT สุทธิ (Output - Input)</span>
+                <span style={{ fontSize:15,fontWeight:800,color:taxBreakdown.vatNet>=0?"#e65100":"#1b5e20" }}>
+                  {taxBreakdown.vatNet>=0?`฿${fmt(taxBreakdown.vatNet)}`:`ขอคืน ฿${fmt(-taxBreakdown.vatNet)}`}
+                </span>
               </div>
             </div>
 
@@ -954,7 +989,7 @@ export default function App() {
                           </div>
                           <div style={{ textAlign:"right",flexShrink:0 }}>
                             <div style={{ fontWeight:800,fontSize:14,color:e.type==="income"?"#2e7d32":"#c62828" }}>{e.type==="income"?"+":"-"}฿{fmt(e.amount)}</div>
-                            {(e.vat||e.wht)?<div style={{ fontSize:10,color:"#aaa" }}>{e.vat?`VAT ฿${fmt(e.vat)} `:""}{e.wht?`หัก ฿${fmt(e.wht)}`:""}</div>:null}
+                            {(e.vat||e.wht)?<div style={{ fontSize:10,color:"#aaa" }}>{e.vat?`${e.type==="income"?"Out":"In"} VAT ฿${fmt(e.vat)} `:""}{e.wht?`WHT ${e.type==="income"?"เครดิต":"นำส่ง"} ฿${fmt(e.wht)}`:""}</div>:null}
                           </div>
                         </div>
                       ))}
@@ -1017,7 +1052,7 @@ export default function App() {
                           {e.type==="income"?"+":"-"}฿{fmt(e.amount)}
                         </div>
                         {(e.vat||e.wht)&&<div style={{ fontSize:10,color:"#aaa" }}>
-                          {e.vat?`VAT ฿${fmt(e.vat)} `:""}{e.wht?`หัก ฿${fmt(e.wht)}`:""}
+                          {e.vat?`${e.type==="income"?"Out":"In"} VAT ฿${fmt(e.vat)} `:""}{e.wht?`WHT ${e.type==="income"?"เครดิต":"นำส่ง"} ฿${fmt(e.wht)}`:""}
                         </div>}
                       </div>
                     </div>
@@ -1366,8 +1401,14 @@ export default function App() {
                 <label style={{ fontSize:12,color:"#aaa",fontWeight:700,display:"block",marginBottom:8 }}>ภาษี</label>
                 <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
                   {([
-                    { key:"useVat" as const, label:"VAT 7%", checked:form.useVat, rate:VAT_RATE, rateColor:"#e65100" },
-                    { key:"useWht" as const, label:"หัก ณ ที่จ่าย 3%", checked:form.useWht, rate:WHT_RATE, rateColor:"#c62828" },
+                    { key:"useVat" as const,
+                      label:`VAT 7% — ${form.type==="income"?"Output VAT (ขาย)":"Input VAT (ซื้อ)"}`,
+                      sub: form.type==="income"?"เก็บจากลูกค้า ต้องนำส่งสรรพากร":"จ่ายให้ผู้ขาย ใช้หักลดได้",
+                      checked:form.useVat, rate:VAT_RATE, rateColor:"#e65100" },
+                    { key:"useWht" as const,
+                      label:`หัก ณ ที่จ่าย 3% — ${form.type==="income"?"ถูกหัก (เครดิตภาษี)":"หักจ่าย (นำส่งสรรพากร)"}`,
+                      sub: form.type==="income"?"ลูกค้าหักจากเรา ใช้เครดิตปลายปี":"เราหักผู้รับเงิน ต้องนำส่ง",
+                      checked:form.useWht, rate:WHT_RATE, rateColor:"#c62828" },
                   ]).map(opt=>(
                     <button
                       key={opt.key}
@@ -1391,8 +1432,9 @@ export default function App() {
                         boxShadow:opt.checked?"0 2px 6px rgba(46,125,50,.3)":"none",
                       }}>{opt.checked?"✓":""}</div>
                       <div style={{ flex:1 }}>
-                        <div style={{ fontSize:15,fontWeight:700,color:opt.checked?"#1b5e20":"#333" }}>{opt.label}</div>
-                        {opt.checked&&form.amount&&<div style={{ fontSize:13,color:opt.rateColor,marginTop:2,fontWeight:600 }}>= ฿{fmt(+form.amount*opt.rate)}</div>}
+                        <div style={{ fontSize:14,fontWeight:700,color:opt.checked?"#1b5e20":"#333",lineHeight:1.3 }}>{opt.label}</div>
+                        <div style={{ fontSize:11,color:"#777",marginTop:3 }}>{opt.sub}</div>
+                        {opt.checked&&form.amount&&<div style={{ fontSize:13,color:opt.rateColor,marginTop:4,fontWeight:700 }}>= ฿{fmt(+form.amount*opt.rate)}</div>}
                       </div>
                     </button>
                   ))}
@@ -1524,24 +1566,73 @@ export default function App() {
         <div className="modal-bg" onClick={()=>setShowTaxSummary(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
-            <div style={{ fontWeight:800,fontSize:18,marginBottom:20 }}>🧾 สรุปภาษีทั้งหมด</div>
-            <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-              <div style={{ background:"#fff3e0",borderRadius:12,padding:16 }}>
-                <div style={{ fontSize:12,color:"#e65100",fontWeight:700,marginBottom:6 }}>VAT 7% ที่ต้องนำส่ง</div>
-                <div style={{ fontSize:24,fontWeight:800,color:"#e65100" }}>฿{fmt(totalVat)}</div>
-                <div style={{ fontSize:12,color:"#aaa",marginTop:4 }}>จาก {entries.filter(e=>e.vat).length} รายการ</div>
-              </div>
-              <div style={{ background:"#fce4ec",borderRadius:12,padding:16 }}>
-                <div style={{ fontSize:12,color:"#c62828",fontWeight:700,marginBottom:6 }}>หัก ณ ที่จ่าย 3% ที่ถูกหัก</div>
-                <div style={{ fontSize:24,fontWeight:800,color:"#c62828" }}>฿{fmt(totalWht)}</div>
-                <div style={{ fontSize:12,color:"#aaa",marginTop:4 }}>จาก {entries.filter(e=>e.wht).length} รายการ</div>
-              </div>
-              <div style={{ background:"#e8f5e9",borderRadius:12,padding:16 }}>
-                <div style={{ fontSize:12,color:"#2e7d32",fontWeight:700,marginBottom:6 }}>ภาษีสุทธิที่ต้องจ่าย (VAT - หัก ณ ที่จ่าย)</div>
-                <div style={{ fontSize:24,fontWeight:800,color:"#2e7d32" }}>฿{fmt(totalVat - totalWht)}</div>
+            <div style={{ fontWeight:800,fontSize:18,marginBottom:6 }}>🧾 สรุปภาษี</div>
+            <div style={{ fontSize:12,color:"#888",marginBottom:18 }}>เดือนยื่นปัจจุบัน: <b>{vatDueInfo.monthStr}</b> · ครบกำหนด {fmtDate(vatDueInfo.dueDate.toISOString().slice(0,10))}</div>
+
+            {/* VAT */}
+            <div style={{ marginBottom:14 }}>
+              <div style={{ fontSize:13,fontWeight:800,color:"#0d47a1",marginBottom:8,letterSpacing:".04em" }}>📊 VAT</div>
+              <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                <div style={{ background:"#e3f2fd",borderRadius:10,padding:12,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                  <div>
+                    <div style={{ fontSize:12,color:"#0d47a1",fontWeight:700 }}>Output VAT (VAT ขาย)</div>
+                    <div style={{ fontSize:10,color:"#666",marginTop:2 }}>เก็บจากลูกค้า ต้องนำส่งสรรพากร</div>
+                  </div>
+                  <div style={{ fontSize:18,fontWeight:800,color:"#0d47a1" }}>฿{fmt(vatDueInfo.outputVat)}</div>
+                </div>
+                <div style={{ background:"#fff3e0",borderRadius:10,padding:12,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                  <div>
+                    <div style={{ fontSize:12,color:"#e65100",fontWeight:700 }}>Input VAT (VAT ซื้อ)</div>
+                    <div style={{ fontSize:10,color:"#666",marginTop:2 }}>จ่ายให้ผู้ขาย หักออกจากที่ต้องนำส่ง</div>
+                  </div>
+                  <div style={{ fontSize:18,fontWeight:800,color:"#e65100" }}>฿{fmt(vatDueInfo.inputVat)}</div>
+                </div>
+                <div style={{ background:vatDueInfo.vatNet>=0?"#fff8e1":"#e8f5e9",borderRadius:10,padding:12,display:"flex",justifyContent:"space-between",alignItems:"center",border:`2px solid ${vatDueInfo.vatNet>=0?"#ffb74d":"#a5d6a7"}` }}>
+                  <div>
+                    <div style={{ fontSize:12,fontWeight:800,color:vatDueInfo.vatNet>=0?"#bf360c":"#1b5e20" }}>VAT สุทธิ (Output - Input)</div>
+                    <div style={{ fontSize:10,color:"#666",marginTop:2 }}>{vatDueInfo.vatNet>=0?"ต้องนำส่ง":"ขอคืนหรือใช้เครดิตเดือนถัดไป"}</div>
+                  </div>
+                  <div style={{ fontSize:20,fontWeight:800,color:vatDueInfo.vatNet>=0?"#bf360c":"#1b5e20" }}>
+                    {vatDueInfo.vatNet>=0?`฿${fmt(vatDueInfo.vatNet)}`:`ขอคืน ฿${fmt(-vatDueInfo.vatNet)}`}
+                  </div>
+                </div>
               </div>
             </div>
-            <button className="btn btn-ghost" style={{ marginTop:20,width:"100%",padding:13 }} onClick={()=>setShowTaxSummary(false)}>ปิด</button>
+
+            {/* WHT */}
+            <div style={{ marginBottom:14 }}>
+              <div style={{ fontSize:13,fontWeight:800,color:"#4527a0",marginBottom:8,letterSpacing:".04em" }}>📊 หัก ณ ที่จ่าย (WHT)</div>
+              <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                <div style={{ background:"#ede7f6",borderRadius:10,padding:12,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                  <div>
+                    <div style={{ fontSize:12,color:"#4527a0",fontWeight:700 }}>ถูกหัก (Withheld)</div>
+                    <div style={{ fontSize:10,color:"#666",marginTop:2 }}>ลูกค้าหักจากเรา = เครดิตภาษีเงินได้</div>
+                  </div>
+                  <div style={{ fontSize:18,fontWeight:800,color:"#4527a0" }}>฿{fmt(vatDueInfo.whtCredit)}</div>
+                </div>
+                <div style={{ background:"#fce4ec",borderRadius:10,padding:12,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                  <div>
+                    <div style={{ fontSize:12,color:"#c62828",fontWeight:700 }}>หักจากคนอื่น (Withhold)</div>
+                    <div style={{ fontSize:10,color:"#666",marginTop:2 }}>เราหักผู้รับเหมา/พนักงาน = ต้องนำส่ง</div>
+                  </div>
+                  <div style={{ fontSize:18,fontWeight:800,color:"#c62828" }}>฿{fmt(vatDueInfo.whtRemit)}</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Grand total */}
+            <div style={{ background:vatDueInfo.totalRemit>0?"linear-gradient(135deg,#ffebee,#fce4ec)":"linear-gradient(135deg,#e8f5e9,#f1f8e9)",borderRadius:12,padding:16,marginBottom:6 }}>
+              <div style={{ fontSize:12,fontWeight:800,color:vatDueInfo.totalRemit>0?"#b71c1c":"#1b5e20",marginBottom:6 }}>
+                {vatDueInfo.totalRemit>0?"💸 ต้องนำส่งสรรพากรเดือนนี้":"✅ ไม่มีภาษีต้องนำส่งเดือนนี้"}
+              </div>
+              <div style={{ fontSize:11,color:"#666",marginBottom:6 }}>= VAT สุทธิ (ถ้าเป็นบวก) + WHT ที่หักจากคนอื่น</div>
+              <div style={{ fontSize:11,color:"#666",marginBottom:8 }}>
+                {`= ฿${fmt(vatDueInfo.vatRemit)} (VAT) + ฿${fmt(vatDueInfo.whtRemit)} (WHT)`}
+              </div>
+              <div style={{ fontSize:26,fontWeight:800,color:vatDueInfo.totalRemit>0?"#b71c1c":"#1b5e20",textAlign:"right" }}>฿{fmt(vatDueInfo.totalRemit)}</div>
+            </div>
+
+            <button className="btn btn-ghost" style={{ marginTop:10,width:"100%",padding:13 }} onClick={()=>setShowTaxSummary(false)}>ปิด</button>
           </div>
         </div>
       )}
