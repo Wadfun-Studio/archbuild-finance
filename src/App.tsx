@@ -3,7 +3,9 @@ import { useState, useMemo, useEffect, useCallback } from "react";
 const API = "https://script.google.com/macros/s/AKfycbzCUVLVzXjRWSQri8XTjOrFh373mp_dU3PkCTODGPhyX1bsYNMWf1CxhS79ntUDer5IwA/exec";
 
 const CATS_IN = ["ค่าออกแบบ","ค่าก่อสร้าง","ค่าที่ปรึกษา","ค่างวดโครงการ","รายได้อื่น ๆ"];
-const CATS_EX = ["ค่าวัสดุก่อสร้าง","ค่าแรงงาน","ค่าเช่าเครื่องจักร","ค่าสาธารณูปโภค","เงินเดือนพนักงาน","ค่าซอฟต์แวร์/ใบอนุญาต","ค่าการตลาด","ค่าเดินทาง","ค่าใช้จ่ายอื่น ๆ"];
+const CATS_EX = ["ค่าวัสดุก่อสร้าง","ค่าแรงงาน","ค่าเช่าเครื่องจักร","ค่าสาธารณูปโภค","เงินเดือนพนักงาน","ค่าเช่าออฟฟิศ","ค่าซอฟต์แวร์/ใบอนุญาต","ค่าการตลาด","ค่าเดินทาง","ค่าใช้จ่ายอื่น ๆ"];
+const OVERHEAD_CATS = new Set(["เงินเดือนพนักงาน","ค่าเช่าออฟฟิศ","ค่าซอฟต์แวร์/ใบอนุญาต","ค่าสาธารณูปโภค","ค่าการตลาด"]);
+const isOverhead = (cat: string) => OVERHEAD_CATS.has(cat);
 const VAT_RATE = 0.07;
 const WHT_RATE = 0.03;
 
@@ -158,19 +160,31 @@ export default function App() {
     }
   }, []);
 
-  // Check installments and notify
+  // Check installments and notify (payables: 3-day window, receivables: 7-day window)
   useEffect(() => {
     if (!notifGranted || installments.length === 0) return;
     installments.filter(i => i.status === "pending").forEach(inst => {
       const days = daysUntil(inst.dueDate);
-      if (days <= 7 && days >= 0) {
-        new Notification(`🔔 ครบกำหนด${instLabel(inst.kind)}: ${inst.name}`, {
-          body: `โครงการ ${inst.project} — ฿${fmt(inst.amount)} — อีก ${days} วัน (${fmtDate(inst.dueDate)})`,
-          icon: "/favicon.ico"
-        });
-      }
+      if (days < 0) return;
+      const window = inst.kind === "payable" ? 3 : 7;
+      if (days > window) return;
+      const icon = inst.kind === "payable" ? "💸" : "💰";
+      new Notification(`${icon} ครบกำหนด${instLabel(inst.kind)}: ${inst.name}`, {
+        body: `โครงการ ${inst.project} — ฿${fmt(inst.amount)} — อีก ${days} วัน (${fmtDate(inst.dueDate)})`,
+        icon: "/favicon.ico"
+      });
     });
   }, [notifGranted, installments]);
+
+  // VAT due notification on the 15th
+  useEffect(() => {
+    if (!notifGranted) return;
+    if (!vatDueInfo.isDueToday || vatDueInfo.amount <= 0) return;
+    new Notification("🧾 วันนี้ครบกำหนดยื่น VAT", {
+      body: `VAT เดือน ${vatDueInfo.monthStr} — ต้องนำส่ง ฿${fmt(vatDueInfo.amount)}`,
+      icon: "/favicon.ico"
+    });
+  }, [notifGranted, vatDueInfo]);
 
   async function requestNotifPermission() {
     if (!("Notification" in window)) { showToast("เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน", "err"); return; }
@@ -271,9 +285,53 @@ export default function App() {
 
   const totalIncome = useMemo(()=>entries.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0),[entries]);
   const totalExpense = useMemo(()=>entries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0),[entries]);
+  const totalOverhead = useMemo(()=>entries.filter(e=>e.type==="expense"&&isOverhead(e.category)).reduce((s,e)=>s+e.amount,0),[entries]);
+  const totalProjectExpense = totalExpense - totalOverhead;
+  const overheadPct = totalIncome > 0 ? (totalOverhead/totalIncome)*100 : 0;
   const totalVat = useMemo(()=>entries.reduce((s,e)=>s+(e.vat||0),0),[entries]);
   const totalWht = useMemo(()=>entries.reduce((s,e)=>s+(e.wht||0),0),[entries]);
   const net = totalIncome - totalExpense;
+
+  // Monthly cash flow with cumulative balance
+  const monthlyCashflow = useMemo(()=>{
+    const map: Record<string,{inflow:number,outflow:number}> = {};
+    entries.forEach(e=>{
+      const m = String(e.date).slice(0,7);
+      if(!map[m]) map[m] = {inflow:0,outflow:0};
+      if (e.type==="income") map[m].inflow += e.amount;
+      else map[m].outflow += e.amount;
+    });
+    const list = Object.entries(map).sort(([a],[b])=>a.localeCompare(b));
+    let cumulative = 0;
+    return list.map(([month,v])=>{
+      const n = v.inflow - v.outflow;
+      cumulative += n;
+      return { month, inflow:v.inflow, outflow:v.outflow, net:n, cumulative };
+    });
+  },[entries]);
+
+  // VAT due based on 15th-of-next-month filing rule
+  const vatDueInfo = useMemo(()=>{
+    const now = new Date();
+    const day = now.getDate();
+    // VAT for month M is due by 15th of M+1.
+    // If today is before 15th of current month, you still owe VAT for previous month (due this 15).
+    // If today is on/after 15th, the next batch (current month) is filed by 15th next month.
+    const beforeCutoff = day < 15;
+    const targetMonth = beforeCutoff
+      ? new Date(now.getFullYear(), now.getMonth()-1, 1)
+      : new Date(now.getFullYear(), now.getMonth(), 1);
+    const dueDate = beforeCutoff
+      ? new Date(now.getFullYear(), now.getMonth(), 15)
+      : new Date(now.getFullYear(), now.getMonth()+1, 15);
+    const monthStr = `${targetMonth.getFullYear()}-${String(targetMonth.getMonth()+1).padStart(2,"0")}`;
+    const amount = entries.filter(e=>String(e.date).slice(0,7)===monthStr).reduce((s,e)=>s+(e.vat||0),0);
+    const daysToDue = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
+    return { monthStr, dueDate, daysToDue, amount, isDueToday: day===15 };
+  },[entries]);
+
+  // Near-due / overdue payables (3-day window)
+  const urgentPayables = useMemo(()=>installments.filter(i=>i.kind==="payable"&&i.status==="pending"&&daysUntil(i.dueDate)<=3),[installments]);
 
   const hasUserFilter = filterType!=="all"||filterProject!=="all"||!!dateFrom||!!dateTo;
   const filtered = useMemo(()=>{
@@ -387,6 +445,21 @@ export default function App() {
               </div>
             )}
 
+            {/* VAT due alert */}
+            {vatDueInfo.amount>0&&(
+              <div style={{ background:vatDueInfo.isDueToday?"#ffebee":vatDueInfo.daysToDue<=3?"#fff3e0":"#e3f2fd",border:`1.5px solid ${vatDueInfo.isDueToday?"#ef9a9a":vatDueInfo.daysToDue<=3?"#ffb74d":"#90caf9"}`,borderRadius:14,padding:"12px 16px" }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:10 }}>
+                  <div style={{ minWidth:0 }}>
+                    <div style={{ fontWeight:700,fontSize:13,color:vatDueInfo.isDueToday?"#c62828":vatDueInfo.daysToDue<=3?"#e65100":"#0d47a1" }}>
+                      🧾 {vatDueInfo.isDueToday?"วันนี้ครบกำหนดยื่น VAT!":`ครบกำหนดยื่น VAT ใน ${vatDueInfo.daysToDue} วัน`}
+                    </div>
+                    <div style={{ fontSize:11,color:"#666",marginTop:3 }}>VAT เดือน {vatDueInfo.monthStr} · กำหนดยื่น {fmtDate(vatDueInfo.dueDate.toISOString().slice(0,10))}</div>
+                  </div>
+                  <div style={{ fontSize:18,fontWeight:800,color:"#e65100",whiteSpace:"nowrap" }}>฿{fmt(vatDueInfo.amount)}</div>
+                </div>
+              </div>
+            )}
+
             {/* Stat cards */}
             <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
               {[{l:"รายรับรวม",v:totalIncome,c:"#2e7d32",bg:"#e8f5e9",i:"💰"},{l:"รายจ่ายรวม",v:totalExpense,c:"#c62828",bg:"#ffebee",i:"💸"}].map(x=>(
@@ -396,6 +469,26 @@ export default function App() {
                   <div style={{ fontSize:18,fontWeight:800,color:x.c }}>฿{fmt(x.v)}</div>
                 </div>
               ))}
+            </div>
+
+            {/* Expense breakdown: project vs overhead */}
+            <div className="card" style={{ padding:16 }}>
+              <div className="stitle" style={{ marginBottom:12 }}>ค่าใช้จ่ายแยกประเภท</div>
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+                <div style={{ background:"#fce4ec",borderRadius:10,padding:12 }}>
+                  <div style={{ fontSize:11,color:"#880e4f",marginBottom:3,fontWeight:600 }}>🏗️ ค่าโครงการ</div>
+                  <div style={{ fontSize:16,fontWeight:800,color:"#880e4f" }}>฿{fmt(totalProjectExpense)}</div>
+                  <div style={{ fontSize:10,color:"#aaa",marginTop:2 }}>{totalExpense>0?((totalProjectExpense/totalExpense)*100).toFixed(1):"0.0"}% ของรายจ่ายรวม</div>
+                </div>
+                <div style={{ background:"#ede7f6",borderRadius:10,padding:12 }}>
+                  <div style={{ fontSize:11,color:"#4527a0",marginBottom:3,fontWeight:600 }}>🏢 Overhead</div>
+                  <div style={{ fontSize:16,fontWeight:800,color:"#4527a0" }}>฿{fmt(totalOverhead)}</div>
+                  <div style={{ fontSize:10,color:"#aaa",marginTop:2 }}>{overheadPct.toFixed(2)}% ของรายรับ</div>
+                </div>
+              </div>
+              {overheadPct>30&&totalIncome>0&&(
+                <div style={{ marginTop:10,fontSize:11,color:"#c62828",fontWeight:600 }}>⚠️ Overhead สูงเกิน 30% ของรายรับ</div>
+              )}
             </div>
 
             <div className="card" style={{ padding:16,background:net>=0?"linear-gradient(135deg,#e8eaf6,#f3f4ff)":"linear-gradient(135deg,#ffebee,#fce4ec)",border:"none" }}>
@@ -430,6 +523,47 @@ export default function App() {
             <div className="card" style={{ padding:20 }}>
               <div className="stitle">รายรับ-จ่ายรายเดือน</div>
               <BarChart entries={entries}/>
+            </div>
+
+            {/* Cash Flow table */}
+            <div className="card" style={{ padding:20 }}>
+              <div className="stitle">💧 กระแสเงินสดรายเดือน (Cash Flow)</div>
+              {monthlyCashflow.length===0?(
+                <div style={{ color:"#bbb",fontSize:13,textAlign:"center",padding:"16px 0" }}>ยังไม่มีข้อมูล</div>
+              ):(
+                <div style={{ overflowX:"auto",marginTop:6 }}>
+                  <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:480 }}>
+                    <thead>
+                      <tr style={{ borderBottom:"2px solid #e0e4f0" }}>
+                        <th style={{ textAlign:"left",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>เดือน</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#2e7d32",fontSize:11,fontWeight:700 }}>เงินเข้า</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#c62828",fontSize:11,fontWeight:700 }}>เงินออก</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>สุทธิ</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>คงเหลือสะสม</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthlyCashflow.slice(-12).map(r=>{
+                        const [y,m] = r.month.split("-");
+                        const label = new Date(+y,+m-1).toLocaleDateString("th-TH",{month:"short",year:"2-digit"});
+                        const negRow = r.net<0;
+                        return (
+                          <tr key={r.month} style={{ background:negRow?"#ffebee":"transparent",borderBottom:"1px solid #f5f5f5" }}>
+                            <td style={{ padding:"10px 6px",fontWeight:600 }}>{label}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#2e7d32",fontWeight:600 }}>+฿{fmt(r.inflow)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#c62828",fontWeight:600 }}>-฿{fmt(r.outflow)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:800,color:negRow?"#c62828":"#2e7d32" }}>{negRow?"":"+"}฿{fmt(r.net)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:700,color:r.cumulative<0?"#c62828":"#1565c0" }}>฿{fmt(r.cumulative)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {monthlyCashflow.some(r=>r.net<0)&&(
+                <div style={{ marginTop:8,fontSize:11,color:"#c62828",fontWeight:600 }}>⚠️ มีเดือนที่เงินติดลบ — ตรวจสอบการบริหารกระแสเงินสด</div>
+              )}
             </div>
 
             <div className="card" style={{ padding:20 }}>
@@ -592,8 +726,31 @@ export default function App() {
               <div className="card" style={{ padding:14 }}>
                 <label style={{ fontSize:11,color:"#aaa",fontWeight:700,display:"block",marginBottom:6,letterSpacing:".06em" }}>โครงการที่ต้องการดู</label>
                 <select value={proj} onChange={e=>setSelectedProject(e.target.value)} style={{ fontSize:15,fontWeight:700 }}>
-                  {projects.map(p=><option key={p} value={p}>{p}</option>)}
+                  {projects.map(p=>{
+                    const cnt = installments.filter(i=>i.project===p&&i.kind==="payable"&&i.status==="pending"&&daysUntil(i.dueDate)<=3).length;
+                    return <option key={p} value={p}>{cnt>0?`🚨 (${cnt}) `:""}{p}</option>;
+                  })}
                 </select>
+                {(()=>{
+                  const projUrgentPay = urgentPayables.filter(i=>i.project===proj);
+                  if (projUrgentPay.length===0) return null;
+                  return (
+                    <div style={{ marginTop:10,background:"#ffebee",border:"1.5px solid #ef9a9a",borderRadius:10,padding:"10px 12px" }}>
+                      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:4 }}>
+                        <span style={{ fontWeight:700,fontSize:13,color:"#c62828" }}>🚨 งวดจ่ายใกล้ครบกำหนด</span>
+                        <span style={{ background:"#c62828",color:"#fff",fontSize:11,fontWeight:700,padding:"2px 10px",borderRadius:20 }}>{projUrgentPay.length}</span>
+                      </div>
+                      {projUrgentPay.slice(0,3).map(i=>{
+                        const d = daysUntil(i.dueDate);
+                        return (
+                          <div key={i.id} style={{ fontSize:12,color:"#b71c1c",marginTop:2 }}>
+                            • {i.name} — ฿{fmt(i.amount)} — {d<0?`เลย ${Math.abs(d)} วัน`:d===0?"ครบกำหนดวันนี้":`อีก ${d} วัน`}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* P&L summary card */}
