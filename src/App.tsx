@@ -285,7 +285,9 @@ async function apiPost(action: string, body: object = {}) {
   return (await fetch(url.toString(), { method: "POST", body: JSON.stringify(body) })).json();
 }
 
-interface Entry { id: number; date: string; type: string; category: string; project: string; description: string; amount: number; vat?: number; wht?: number; }
+type VatType = "output"|"input";
+type WhtType = "withheld"|"withhold";
+interface Entry { id: number; date: string; type: string; category: string; project: string; description: string; amount: number; vat?: number; wht?: number; vatType?: VatType; whtType?: WhtType; }
 type InstKind = "receivable"|"payable";
 type InstStatus = "pending"|"received"|"paid";
 interface ProjectTaxSettings { hasVat: boolean; hasWht: boolean; whtRate: number; }
@@ -389,7 +391,20 @@ export default function App() {
     setLoading(true); setError(null);
     try {
       const [eRes, pRes] = await Promise.all([apiGet("getAll"), apiGet("getProjects")]);
-      if (eRes.ok) setEntries(eRes.entries);
+      if (eRes.ok) {
+        const normalized: Entry[] = (eRes.entries as Entry[]).map(e => {
+          const vat = Number(e.vat) || 0;
+          const wht = Number(e.wht) || 0;
+          const vatType: VatType | undefined = e.vatType
+            ? (e.vatType as VatType)
+            : (vat > 0 ? (e.type === "income" ? "output" : "input") : undefined);
+          const whtType: WhtType | undefined = e.whtType
+            ? (e.whtType as WhtType)
+            : (wht > 0 ? (e.type === "income" ? "withheld" : "withhold") : undefined);
+          return { ...e, amount: Number(e.amount) || 0, vat, wht, vatType, whtType };
+        });
+        setEntries(normalized);
+      }
       if (pRes.ok) setProjects(pRes.projects);
       // load installments from localStorage (migrate older records without kind)
       const saved = localStorage.getItem("wf_installments");
@@ -507,7 +522,18 @@ export default function App() {
     setSaving(true);
     try {
       const { vat, wht } = calcTax(+form.amount, form.useVat, form.useWht);
-      const body = { ...form, amount:+form.amount, vat, wht };
+      const vatType: VatType | undefined = vat > 0 ? (form.type === "income" ? "output" : "input") : undefined;
+      const whtType: WhtType | undefined = wht > 0 ? (form.type === "income" ? "withheld" : "withhold") : undefined;
+      // Build body without frontend-only flags (useVat/useWht)
+      const body = {
+        date: form.date,
+        type: form.type,
+        category: form.category,
+        project: form.project,
+        description: form.description,
+        amount: +form.amount,
+        vat, wht, vatType, whtType,
+      };
       if (editId) {
         await apiPost("updateEntry", {...body, id:editId});
         setEntries(es => es.map(e => e.id===editId ? {...body, id:editId} : e));
