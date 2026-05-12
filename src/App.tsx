@@ -25,9 +25,16 @@ async function apiPost(action: string, body: object = {}) {
 }
 
 interface Entry { id: number; date: string; type: string; category: string; project: string; description: string; amount: number; vat?: number; wht?: number; }
-interface Installment { id: number; project: string; name: string; amount: number; dueDate: string; status: "pending"|"received"; }
+type InstKind = "receivable"|"payable";
+type InstStatus = "pending"|"received"|"paid";
+interface Installment { id: number; kind: InstKind; project: string; name: string; amount: number; dueDate: string; status: InstStatus; }
 interface FormState { date: string; type: string; category: string; project: string; description: string; amount: string; useVat: boolean; useWht: boolean; }
-interface InstForm { project: string; name: string; amount: string; dueDate: string; }
+interface InstForm { kind: InstKind; project: string; name: string; amount: string; dueDate: string; }
+
+const instLabel = (kind: InstKind) => kind==="payable" ? "งวดจ่าย" : "งวดเบิก";
+const instDoneLabel = (kind: InstKind) => kind==="payable" ? "จ่ายแล้ว" : "รับแล้ว";
+const instPendingLabel = (kind: InstKind) => kind==="payable" ? "รอจ่าย" : "รอรับ";
+const instDoneStatus = (kind: InstKind): InstStatus => kind==="payable" ? "paid" : "received";
 
 function Donut({ income, expense }: { income: number; expense: number }) {
   const total = income + expense;
@@ -114,9 +121,11 @@ export default function App() {
   const [newProj, setNewProj] = useState("");
   const [toast, setToast] = useState<{msg:string,type:string}|null>(null);
   const [showInstForm, setShowInstForm] = useState(false);
-  const [instForm, setInstForm] = useState<InstForm>({ project:"", name:"งวดที่ 1", amount:"", dueDate:"" });
+  const [instForm, setInstForm] = useState<InstForm>({ kind:"receivable", project:"", name:"งวดที่ 1", amount:"", dueDate:"" });
+  const [instTab, setInstTab] = useState<InstKind>("receivable");
   const [showTaxSummary, setShowTaxSummary] = useState(false);
   const [notifGranted, setNotifGranted] = useState(false);
+  const [selectedProject, setSelectedProject] = useState<string|null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null);
@@ -124,9 +133,12 @@ export default function App() {
       const [eRes, pRes] = await Promise.all([apiGet("getAll"), apiGet("getProjects")]);
       if (eRes.ok) setEntries(eRes.entries);
       if (pRes.ok) setProjects(pRes.projects);
-      // load installments from localStorage
+      // load installments from localStorage (migrate older records without kind)
       const saved = localStorage.getItem("wf_installments");
-      if (saved) setInstallments(JSON.parse(saved));
+      if (saved) {
+        const list: Installment[] = JSON.parse(saved).map((i: Installment & {kind?: InstKind}) => ({ ...i, kind: i.kind || "receivable" }));
+        setInstallments(list);
+      }
     } catch { setError("เชื่อมต่อไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ต"); }
     setLoading(false);
   }, []);
@@ -146,7 +158,7 @@ export default function App() {
     installments.filter(i => i.status === "pending").forEach(inst => {
       const days = daysUntil(inst.dueDate);
       if (days <= 7 && days >= 0) {
-        new Notification(`🔔 ครบกำหนดงวด: ${inst.name}`, {
+        new Notification(`🔔 ครบกำหนด${instLabel(inst.kind)}: ${inst.name}`, {
           body: `โครงการ ${inst.project} — ฿${fmt(inst.amount)} — อีก ${days} วัน (${fmtDate(inst.dueDate)})`,
           icon: "/favicon.ico"
         });
@@ -168,15 +180,16 @@ export default function App() {
 
   function addInstallment() {
     if (!instForm.project || !instForm.name || !instForm.amount || !instForm.dueDate) { showToast("กรอกข้อมูลให้ครบ", "err"); return; }
-    const newInst: Installment = { id: Date.now(), project: instForm.project, name: instForm.name, amount: +instForm.amount, dueDate: instForm.dueDate, status: "pending" };
+    const newInst: Installment = { id: Date.now(), kind: instForm.kind, project: instForm.project, name: instForm.name, amount: +instForm.amount, dueDate: instForm.dueDate, status: "pending" };
     saveInstallments([...installments, newInst]);
     setShowInstForm(false);
-    setInstForm({ project: projects[0]||"", name:"งวดที่ 1", amount:"", dueDate:"" });
-    showToast("เพิ่มงวดงานแล้ว");
+    setInstForm({ kind: instForm.kind, project: projects[0]||"", name:"งวดที่ 1", amount:"", dueDate:"" });
+    showToast(`เพิ่ม${instLabel(instForm.kind)}แล้ว`);
   }
 
-  function markInstallment(id: number, status: "pending"|"received") {
-    saveInstallments(installments.map(i => i.id === id ? {...i, status} : i));
+  function toggleInstallment(inst: Installment) {
+    const next: InstStatus = inst.status === "pending" ? instDoneStatus(inst.kind) : "pending";
+    saveInstallments(installments.map(i => i.id === inst.id ? {...i, status: next} : i));
   }
 
   function deleteInstallment(id: number) {
@@ -358,10 +371,10 @@ export default function App() {
             {/* Urgent installments alert */}
             {urgentInst.length>0&&(
               <div style={{ background:"#fff3e0",border:"1.5px solid #ffb74d",borderRadius:14,padding:"14px 16px" }}>
-                <div style={{ fontWeight:700,fontSize:13,color:"#e65100",marginBottom:8 }}>⚠️ งวดงานที่ใกล้ครบกำหนด ({urgentInst.length} งวด)</div>
+                <div style={{ fontWeight:700,fontSize:13,color:"#e65100",marginBottom:8 }}>⚠️ งวดที่ใกล้ครบกำหนด ({urgentInst.length} งวด)</div>
                 {urgentInst.map(i=>(
                   <div key={i.id} style={{ fontSize:13,color:"#bf360c",marginBottom:4 }}>
-                    • {i.name} — {i.project} — ฿{fmt(i.amount)} — อีก {daysUntil(i.dueDate)} วัน ({fmtDate(i.dueDate)})
+                    <span style={{ fontWeight:700,color:i.kind==="payable"?"#c62828":"#2e7d32" }}>[{instLabel(i.kind)}]</span> {i.name} — {i.project} — ฿{fmt(i.amount)} — อีก {daysUntil(i.dueDate)} วัน ({fmtDate(i.dueDate)})
                   </div>
                 ))}
               </div>
@@ -509,42 +522,85 @@ export default function App() {
         )}
 
         {/* INSTALLMENTS */}
-        {view==="installments"&&(
-          <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-            <button className="btn btn-green" onClick={()=>{ setInstForm({project:projects[0]||"",name:"งวดที่ 1",amount:"",dueDate:""}); setShowInstForm(true); }} style={{ width:"100%",padding:14,fontSize:15 }}>
-              + เพิ่มงวดงาน
-            </button>
-            {installments.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"48px 0",fontSize:14 }}>ยังไม่มีงวดงาน</div>
-            :installments.sort((a,b)=>a.dueDate.localeCompare(b.dueDate)).map(inst=>{
-              const days=daysUntil(inst.dueDate);
-              const isUrgent=days<=7&&days>=0&&inst.status==="pending";
-              const isOverdue=days<0&&inst.status==="pending";
-              return (
-                <div key={inst.id} className="card" style={{ padding:16,borderLeft:`4px solid ${isOverdue?"#c62828":isUrgent?"#ff9800":inst.status==="received"?"#2e7d32":"#ddd"}` }}>
-                  <div style={{ display:"flex",justifyContent:"space-between",marginBottom:6 }}>
-                    <div style={{ fontWeight:700,fontSize:15 }}>{inst.name}</div>
-                    <span className={`badge badge-${inst.status==="received"?"received":"pending"}`}>
-                      {inst.status==="received"?"✅ รับแล้ว":"⏳ รอรับ"}
-                    </span>
-                  </div>
-                  <div style={{ fontSize:13,color:"#666",marginBottom:4 }}>📁 {inst.project}</div>
-                  <div style={{ fontSize:18,fontWeight:800,color:"#1565c0",marginBottom:4 }}>฿{fmt(inst.amount)}</div>
-                  <div style={{ fontSize:13,color:isOverdue?"#c62828":isUrgent?"#e65100":"#888" }}>
-                    📅 {fmtDate(inst.dueDate)}
-                    {inst.status==="pending"&&(isOverdue?` — เลยกำหนด ${Math.abs(days)} วัน`:isUrgent?` — อีก ${days} วัน`:` — อีก ${days} วัน`)}
-                  </div>
-                  <div style={{ display:"flex",gap:8,marginTop:12 }}>
-                    {inst.status==="pending"
-                      ?<button className="btn btn-green" onClick={()=>markInstallment(inst.id,"received")} style={{ flex:1,fontSize:13,padding:8 }}>✅ รับเงินแล้ว</button>
-                      :<button className="btn btn-ghost" onClick={()=>markInstallment(inst.id,"pending")} style={{ flex:1,fontSize:13,padding:8 }}>↩️ ยังไม่รับ</button>
-                    }
-                    <button className="btn btn-red" onClick={()=>deleteInstallment(inst.id)} style={{ flex:1,fontSize:13,padding:8 }}>🗑️ ลบ</button>
-                  </div>
+        {view==="installments"&&(()=>{
+          const tabList = installments.filter(i=>i.kind===instTab).sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+          const tabPending = tabList.filter(i=>i.status==="pending");
+          const tabDone = tabList.filter(i=>i.status!=="pending");
+          const tabPendingTotal = tabPending.reduce((s,i)=>s+i.amount,0);
+          const tabDoneTotal = tabDone.reduce((s,i)=>s+i.amount,0);
+          const isRecv = instTab==="receivable";
+          const accent = isRecv ? "#2e7d32" : "#c62828";
+          const accentBg = isRecv ? "#e8f5e9" : "#ffebee";
+          return (
+            <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+              {/* Tabs */}
+              <div style={{ display:"flex",background:"#fff",borderRadius:12,padding:4,boxShadow:"0 1px 4px rgba(0,0,0,.06)" }}>
+                {([
+                  {k:"receivable" as InstKind, l:"💰 งวดเบิก (ลูกค้า)", c:"#2e7d32"},
+                  {k:"payable" as InstKind,    l:"💸 งวดจ่าย (ผู้รับเหมา)", c:"#c62828"}
+                ]).map(t=>{
+                  const count = installments.filter(i=>i.kind===t.k&&i.status==="pending").length;
+                  return (
+                    <button key={t.k} onClick={()=>setInstTab(t.k)} style={{ flex:1,padding:"10px 8px",border:"none",borderRadius:8,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,background:instTab===t.k?t.c:"transparent",color:instTab===t.k?"#fff":"#888",position:"relative" }}>
+                      {t.l}{count>0&&<span style={{ marginLeft:6,background:instTab===t.k?"rgba(255,255,255,.25)":"#f0f0f0",padding:"1px 7px",borderRadius:10,fontSize:11 }}>{count}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Summary */}
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+                <div className="card" style={{ padding:14,background:accentBg,border:"none" }}>
+                  <div style={{ fontSize:11,color:"#777",marginBottom:3 }}>⏳ {instPendingLabel(instTab)}รวม</div>
+                  <div style={{ fontSize:18,fontWeight:800,color:accent }}>฿{fmt(tabPendingTotal)}</div>
+                  <div style={{ fontSize:11,color:"#999",marginTop:2 }}>{tabPending.length} งวด</div>
                 </div>
-              );
-            })}
-          </div>
-        )}
+                <div className="card" style={{ padding:14,background:"#f5f5f5",border:"none" }}>
+                  <div style={{ fontSize:11,color:"#777",marginBottom:3 }}>✅ {instDoneLabel(instTab)}แล้วรวม</div>
+                  <div style={{ fontSize:18,fontWeight:800,color:"#1565c0" }}>฿{fmt(tabDoneTotal)}</div>
+                  <div style={{ fontSize:11,color:"#999",marginTop:2 }}>{tabDone.length} งวด</div>
+                </div>
+              </div>
+
+              <button className="btn" style={{ width:"100%",padding:14,fontSize:15,background:accent,color:"#fff" }} onClick={()=>{ setInstForm({kind:instTab,project:projects[0]||"",name:`${instLabel(instTab)}ที่ 1`,amount:"",dueDate:""}); setShowInstForm(true); }}>
+                + เพิ่ม{instLabel(instTab)}
+              </button>
+
+              {tabList.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"48px 0",fontSize:14 }}>ยังไม่มี{instLabel(instTab)}</div>
+              :tabList.map(inst=>{
+                const days=daysUntil(inst.dueDate);
+                const isUrgent=days<=7&&days>=0&&inst.status==="pending";
+                const isOverdue=days<0&&inst.status==="pending";
+                const done = inst.status!=="pending";
+                return (
+                  <div key={inst.id} className="card" style={{ padding:16,borderLeft:`4px solid ${isOverdue?"#c62828":isUrgent?"#ff9800":done?"#2e7d32":"#ddd"}` }}>
+                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:6 }}>
+                      <div style={{ fontWeight:700,fontSize:15 }}>{inst.name}</div>
+                      <span className={`badge badge-${done?"received":"pending"}`}>
+                        {done?`✅ ${instDoneLabel(inst.kind)}`:`⏳ ${instPendingLabel(inst.kind)}`}
+                      </span>
+                    </div>
+                    <div style={{ fontSize:13,color:"#666",marginBottom:4 }}>📁 {inst.project}</div>
+                    <div style={{ fontSize:18,fontWeight:800,color:accent,marginBottom:4 }}>
+                      {inst.kind==="payable"?"-":"+"}฿{fmt(inst.amount)}
+                    </div>
+                    <div style={{ fontSize:13,color:isOverdue?"#c62828":isUrgent?"#e65100":"#888" }}>
+                      📅 {fmtDate(inst.dueDate)}
+                      {inst.status==="pending"&&(isOverdue?` — เลยกำหนด ${Math.abs(days)} วัน`:` — อีก ${days} วัน`)}
+                    </div>
+                    <div style={{ display:"flex",gap:8,marginTop:12 }}>
+                      {inst.status==="pending"
+                        ?<button className="btn btn-green" onClick={()=>toggleInstallment(inst)} style={{ flex:1,fontSize:13,padding:8 }}>✅ {instDoneLabel(inst.kind)}</button>
+                        :<button className="btn btn-ghost" onClick={()=>toggleInstallment(inst)} style={{ flex:1,fontSize:13,padding:8 }}>↩️ ยกเลิก</button>
+                      }
+                      <button className="btn btn-red" onClick={()=>deleteInstallment(inst.id)} style={{ flex:1,fontSize:13,padding:8 }}>🗑️ ลบ</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
 
         {/* PROJECTS */}
         {view==="projects"&&(
@@ -558,35 +614,206 @@ export default function App() {
             {projectStats.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"40px 0",fontSize:14 }}>ยังไม่มีข้อมูลโครงการ</div>
             :projectStats.map(p=>{
               const maxVal=Math.max(...projectStats.map(x=>x.income+x.expense),1);
-              const projInst=installments.filter(i=>i.project===p.name&&i.status==="pending");
+              const projRecv=installments.filter(i=>i.project===p.name&&i.kind==="receivable"&&i.status==="pending");
+              const projPay=installments.filter(i=>i.project===p.name&&i.kind==="payable"&&i.status==="pending");
               return (
                 <div key={p.name} className="card" style={{ padding:16 }}>
-                  <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
-                    <span style={{ fontWeight:700,fontSize:14 }}>{p.name}</span>
-                    <span style={{ fontWeight:800,color:p.net>=0?"#2e7d32":"#c62828",fontSize:14 }}>฿{fmt(p.net)}</span>
+                  <div onClick={()=>{ setSelectedProject(p.name); setView("project-detail"); }} style={{ cursor:"pointer" }}>
+                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
+                      <span style={{ fontWeight:700,fontSize:14 }}>{p.name} <span style={{ color:"#1565c0",fontSize:12,marginLeft:4 }}>→</span></span>
+                      <span style={{ fontWeight:800,color:p.net>=0?"#2e7d32":"#c62828",fontSize:14 }}>฿{fmt(p.net)}</span>
+                    </div>
+                    <div style={{ display:"flex",gap:12,fontSize:12,color:"#bbb",marginBottom:(projRecv.length||projPay.length)?8:10 }}>
+                      <span style={{ color:"#2e7d32" }}>รับ ฿{fmt(p.income)}</span>
+                      <span style={{ color:"#c62828" }}>จ่าย ฿{fmt(p.expense)}</span>
+                    </div>
+                    {projRecv.length>0&&(
+                      <div style={{ fontSize:12,color:"#2e7d32",marginBottom:4 }}>⏳ งวดเบิกรอรับ {projRecv.length} งวด รวม ฿{fmt(projRecv.reduce((s,i)=>s+i.amount,0))}</div>
+                    )}
+                    {projPay.length>0&&(
+                      <div style={{ fontSize:12,color:"#c62828",marginBottom:8 }}>⏳ งวดจ่ายค้างจ่าย {projPay.length} งวด รวม ฿{fmt(projPay.reduce((s,i)=>s+i.amount,0))}</div>
+                    )}
+                    <div style={{ background:"#f0f0f0",borderRadius:6,height:8,overflow:"hidden",marginBottom:10 }}>
+                      <div style={{ width:`${((p.income+p.expense)/maxVal)*100}%`,height:"100%",background:p.net>=0?"linear-gradient(90deg,#2e7d32,#66bb6a)":"linear-gradient(90deg,#c62828,#ef5350)",borderRadius:6 }}/>
+                    </div>
                   </div>
-                  <div style={{ display:"flex",gap:12,fontSize:12,color:"#bbb",marginBottom:projInst.length>0?8:10 }}>
-                    <span style={{ color:"#2e7d32" }}>รับ ฿{fmt(p.income)}</span>
-                    <span style={{ color:"#c62828" }}>จ่าย ฿{fmt(p.expense)}</span>
+                  <div style={{ display:"flex",gap:8 }}>
+                    <button className="btn btn-outline" onClick={()=>{ setSelectedProject(p.name); setView("project-detail"); }} style={{ flex:1,fontSize:12,padding:"6px 12px" }}>📊 ดู P&amp;L</button>
+                    <button className="btn btn-red" onClick={()=>removeProject(p.name)} style={{ fontSize:12,padding:"6px 12px" }}>ลบ</button>
                   </div>
-                  {projInst.length>0&&(
-                    <div style={{ fontSize:12,color:"#e65100",marginBottom:8 }}>⏳ งวดรอรับ {projInst.length} งวด รวม ฿{fmt(projInst.reduce((s,i)=>s+i.amount,0))}</div>
-                  )}
-                  <div style={{ background:"#f0f0f0",borderRadius:6,height:8,overflow:"hidden",marginBottom:10 }}>
-                    <div style={{ width:`${((p.income+p.expense)/maxVal)*100}%`,height:"100%",background:p.net>=0?"linear-gradient(90deg,#2e7d32,#66bb6a)":"linear-gradient(90deg,#c62828,#ef5350)",borderRadius:6 }}/>
-                  </div>
-                  <button className="btn btn-red" onClick={()=>removeProject(p.name)} style={{ fontSize:12,padding:"6px 12px" }}>ลบโครงการ</button>
                 </div>
               );
             })}
             {projects.filter(p=>!projectStats.find(s=>s.name===p)).map(p=>(
               <div key={p} className="card" style={{ padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
-                <span style={{ fontSize:14,color:"#999" }}>{p}</span>
+                <span style={{ fontSize:14,color:"#999",cursor:"pointer",flex:1 }} onClick={()=>{ setSelectedProject(p); setView("project-detail"); }}>{p} →</span>
                 <button className="btn btn-red" onClick={()=>removeProject(p)} style={{ fontSize:12,padding:"6px 12px" }}>ลบ</button>
               </div>
             ))}
           </div>
         )}
+
+        {/* PROJECT DETAIL — P&L per project */}
+        {view==="project-detail"&&selectedProject&&(()=>{
+          const proj: string = selectedProject;
+          const projEntries = entries.filter(e=>e.project===proj).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+          const pIncome = projEntries.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
+          const pExpense = projEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+          const pNet = pIncome - pExpense;
+          const pVat = projEntries.reduce((s,e)=>s+(e.vat||0),0);
+          const pWht = projEntries.reduce((s,e)=>s+(e.wht||0),0);
+          const margin = pIncome>0 ? (pNet/pIncome)*100 : 0;
+          const recvInst = installments.filter(i=>i.project===proj&&i.kind==="receivable").sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+          const payInst = installments.filter(i=>i.project===proj&&i.kind==="payable").sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+          const recvPending = recvInst.filter(i=>i.status==="pending").reduce((s,i)=>s+i.amount,0);
+          const payPending = payInst.filter(i=>i.status==="pending").reduce((s,i)=>s+i.amount,0);
+          const projectedNet = pNet + recvPending - payPending;
+          // Category breakdown
+          const catBreakdown: Record<string,{income:number,expense:number}> = {};
+          projEntries.forEach(e=>{ if(!catBreakdown[e.category]) catBreakdown[e.category]={income:0,expense:0}; catBreakdown[e.category][e.type as "income"|"expense"]+=e.amount; });
+          const cats = Object.entries(catBreakdown).sort(([,a],[,b])=>(b.income+b.expense)-(a.income+a.expense));
+
+          return (
+            <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+              {/* Back & title */}
+              <div className="card" style={{ padding:16 }}>
+                <button className="btn btn-ghost" style={{ fontSize:12,padding:"6px 12px",marginBottom:10 }} onClick={()=>{ setSelectedProject(null); setView("projects"); }}>← กลับ</button>
+                <div style={{ fontSize:11,color:"#bbb",fontWeight:700,letterSpacing:".08em" }}>P&amp;L STATEMENT</div>
+                <div style={{ fontWeight:800,fontSize:20,marginTop:2 }}>📁 {proj}</div>
+                <div style={{ fontSize:12,color:"#aaa",marginTop:4 }}>{projEntries.length} รายการ</div>
+              </div>
+
+              {/* P&L summary */}
+              <div className="card" style={{ padding:0,overflow:"hidden" }}>
+                <div style={{ padding:"14px 16px",background:"#f8f9ff",borderBottom:"1px solid #eef0f8" }}>
+                  <div className="stitle" style={{ margin:0 }}>กำไรขาดทุน (P&amp;L)</div>
+                </div>
+                <div style={{ padding:"4px 16px" }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
+                    <span style={{ fontSize:14,color:"#666" }}>รายรับรวม</span>
+                    <span style={{ fontSize:15,fontWeight:700,color:"#2e7d32" }}>+฿{fmt(pIncome)}</span>
+                  </div>
+                  <div style={{ display:"flex",justifyContent:"space-between",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
+                    <span style={{ fontSize:14,color:"#666" }}>รายจ่ายรวม</span>
+                    <span style={{ fontSize:15,fontWeight:700,color:"#c62828" }}>-฿{fmt(pExpense)}</span>
+                  </div>
+                  <div style={{ display:"flex",justifyContent:"space-between",padding:"14px 0",borderTop:"2px solid #e0e0e0",marginTop:2,background:pNet>=0?"linear-gradient(90deg,#e8f5e9,transparent)":"linear-gradient(90deg,#ffebee,transparent)",margin:"0 -16px",paddingLeft:16,paddingRight:16 }}>
+                    <span style={{ fontSize:15,fontWeight:800 }}>{pNet>=0?"📈 กำไรสุทธิ":"📉 ขาดทุนสุทธิ"}</span>
+                    <span style={{ fontSize:18,fontWeight:800,color:pNet>=0?"#2e7d32":"#c62828" }}>{pNet>=0?"+":"-"}฿{fmt(Math.abs(pNet))}</span>
+                  </div>
+                  <div style={{ padding:"10px 0",fontSize:12,color:"#888",textAlign:"right" }}>
+                    Margin: <b style={{ color:margin>=0?"#2e7d32":"#c62828" }}>{margin.toFixed(2)}%</b>
+                    {(pVat||pWht)?<span style={{ marginLeft:10 }}>· VAT ฿{fmt(pVat)} · หัก ฿{fmt(pWht)}</span>:null}
+                  </div>
+                </div>
+              </div>
+
+              {/* Donut */}
+              <div className="card" style={{ padding:20 }}>
+                <div className="stitle">สัดส่วน</div>
+                <Donut income={pIncome} expense={pExpense}/>
+              </div>
+
+              {/* Projected (incl. pending installments) */}
+              {(recvPending>0||payPending>0)&&(
+                <div className="card" style={{ padding:16,background:"#fffde7",border:"1.5px solid #fff59d" }}>
+                  <div style={{ fontSize:12,fontWeight:700,color:"#827717",marginBottom:8 }}>📊 ประมาณการ (รวมงวดที่ยังไม่ดำเนินการ)</div>
+                  {recvPending>0&&<div style={{ display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4 }}><span style={{ color:"#666" }}>+ งวดเบิกค้างรับ</span><span style={{ fontWeight:700,color:"#2e7d32" }}>+฿{fmt(recvPending)}</span></div>}
+                  {payPending>0&&<div style={{ display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4 }}><span style={{ color:"#666" }}>- งวดจ่ายค้างจ่าย</span><span style={{ fontWeight:700,color:"#c62828" }}>-฿{fmt(payPending)}</span></div>}
+                  <div style={{ display:"flex",justifyContent:"space-between",fontSize:14,paddingTop:8,marginTop:6,borderTop:"1px dashed #d4af00" }}>
+                    <span style={{ fontWeight:700 }}>กำไรสุทธิคาดการณ์</span>
+                    <span style={{ fontWeight:800,color:projectedNet>=0?"#2e7d32":"#c62828" }}>{projectedNet>=0?"+":"-"}฿{fmt(Math.abs(projectedNet))}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Receivables for this project */}
+              <div className="card" style={{ padding:16 }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
+                  <div className="stitle" style={{ margin:0,color:"#2e7d32" }}>💰 งวดเบิก ({recvInst.length})</div>
+                  <button className="btn btn-ghost" style={{ fontSize:12,padding:"6px 10px" }} onClick={()=>{ setInstForm({kind:"receivable",project:proj,name:`งวดเบิกที่ ${recvInst.length+1}`,amount:"",dueDate:""}); setShowInstForm(true); }}>+ เพิ่ม</button>
+                </div>
+                {recvInst.length===0?<div style={{ fontSize:13,color:"#ccc",textAlign:"center",padding:"12px 0" }}>ยังไม่มีงวดเบิก</div>
+                :recvInst.map(i=>{
+                  const days=daysUntil(i.dueDate);
+                  const done=i.status!=="pending";
+                  return (
+                    <div key={i.id} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid #f5f5f5" }}>
+                      <div style={{ flex:1,minWidth:0 }}>
+                        <div style={{ fontSize:13,fontWeight:600 }}>{i.name}</div>
+                        <div style={{ fontSize:11,color:done?"#2e7d32":days<0?"#c62828":"#888" }}>{fmtDate(i.dueDate)}{!done&&` · อีก ${days} วัน`}</div>
+                      </div>
+                      <div style={{ textAlign:"right" }}>
+                        <div style={{ fontSize:14,fontWeight:700,color:"#2e7d32" }}>+฿{fmt(i.amount)}</div>
+                        <span className={`badge badge-${done?"received":"pending"}`} style={{ fontSize:10,padding:"2px 8px" }}>{done?"✅ รับแล้ว":"⏳ รอรับ"}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Payables for this project */}
+              <div className="card" style={{ padding:16 }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
+                  <div className="stitle" style={{ margin:0,color:"#c62828" }}>💸 งวดจ่าย ({payInst.length})</div>
+                  <button className="btn btn-ghost" style={{ fontSize:12,padding:"6px 10px" }} onClick={()=>{ setInstForm({kind:"payable",project:proj,name:`งวดจ่ายที่ ${payInst.length+1}`,amount:"",dueDate:""}); setShowInstForm(true); }}>+ เพิ่ม</button>
+                </div>
+                {payInst.length===0?<div style={{ fontSize:13,color:"#ccc",textAlign:"center",padding:"12px 0" }}>ยังไม่มีงวดจ่าย</div>
+                :payInst.map(i=>{
+                  const days=daysUntil(i.dueDate);
+                  const done=i.status!=="pending";
+                  return (
+                    <div key={i.id} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid #f5f5f5" }}>
+                      <div style={{ flex:1,minWidth:0 }}>
+                        <div style={{ fontSize:13,fontWeight:600 }}>{i.name}</div>
+                        <div style={{ fontSize:11,color:done?"#2e7d32":days<0?"#c62828":"#888" }}>{fmtDate(i.dueDate)}{!done&&` · อีก ${days} วัน`}</div>
+                      </div>
+                      <div style={{ textAlign:"right" }}>
+                        <div style={{ fontSize:14,fontWeight:700,color:"#c62828" }}>-฿{fmt(i.amount)}</div>
+                        <span className={`badge badge-${done?"received":"pending"}`} style={{ fontSize:10,padding:"2px 8px" }}>{done?"✅ จ่ายแล้ว":"⏳ รอจ่าย"}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Category breakdown */}
+              {cats.length>0&&(
+                <div className="card" style={{ padding:16 }}>
+                  <div className="stitle">แยกตามหมวดหมู่</div>
+                  {cats.map(([cat,v])=>(
+                    <div key={cat} style={{ padding:"10px 0",borderBottom:"1px solid #f5f5f5" }}>
+                      <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
+                        <span style={{ fontSize:13,fontWeight:600 }}>{cat}</span>
+                        <span style={{ fontSize:13,fontWeight:700,color:v.income>v.expense?"#2e7d32":"#c62828" }}>
+                          {v.income>0?`+฿${fmt(v.income)}`:""}{v.income>0&&v.expense>0?" / ":""}{v.expense>0?`-฿${fmt(v.expense)}`:""}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* All entries */}
+              <div className="card" style={{ padding:16 }}>
+                <div className="stitle">รายการทั้งหมดของโครงการ</div>
+                {projEntries.length===0?<div style={{ fontSize:13,color:"#ccc",textAlign:"center",padding:"16px 0" }}>ยังไม่มีรายการ</div>
+                :projEntries.map((e,i,arr)=>(
+                  <div key={e.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:i<arr.length-1?"1px solid #f5f5f5":"none" }}>
+                    <div style={{ width:32,height:32,borderRadius:10,background:e.type==="income"?"#e8f5e9":"#ffebee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0 }}>{e.type==="income"?"↑":"↓"}</div>
+                    <div style={{ flex:1,minWidth:0 }}>
+                      <div style={{ fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.description}</div>
+                      <div style={{ fontSize:11,color:"#bbb" }}>{e.category} · {fmtDate(String(e.date).slice(0,10))}</div>
+                    </div>
+                    <div style={{ textAlign:"right",flexShrink:0 }}>
+                      <div style={{ fontWeight:700,fontSize:13,color:e.type==="income"?"#2e7d32":"#c62828" }}>{e.type==="income"?"+":"-"}฿{fmt(e.amount)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* BOTTOM NAV */}
@@ -678,13 +905,24 @@ export default function App() {
         <div className="modal-bg" onClick={()=>setShowInstForm(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
-            <div style={{ fontWeight:800,fontSize:18,marginBottom:20 }}>📆 เพิ่มงวดงาน</div>
+            <div style={{ fontWeight:800,fontSize:18,marginBottom:20 }}>📆 เพิ่ม{instLabel(instForm.kind)}</div>
             <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+              <div>
+                <label style={{ fontSize:12,color:"#aaa",fontWeight:700,display:"block",marginBottom:6 }}>ประเภทงวด</label>
+                <div style={{ display:"flex",borderRadius:12,overflow:"hidden",border:"1.5px solid #e0e4f0" }}>
+                  {([
+                    {v:"receivable" as InstKind,l:"💰 งวดเบิก (รับจากลูกค้า)",c:"#2e7d32"},
+                    {v:"payable" as InstKind,   l:"💸 งวดจ่าย (จ่ายผู้รับเหมา)",c:"#c62828"}
+                  ]).map(t=>(
+                    <button key={t.v} onClick={()=>setInstForm(f=>({...f,kind:t.v}))} style={{ flex:1,padding:12,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,background:instForm.kind===t.v?t.c:"transparent",color:instForm.kind===t.v?"#fff":"#bbb" }}>{t.l}</button>
+                  ))}
+                </div>
+              </div>
               {[
                 {label:"โครงการ",el:<select value={instForm.project} onChange={e=>setInstForm(f=>({...f,project:e.target.value}))}>{projects.map(p=><option key={p}>{p}</option>)}</select>},
                 {label:"ชื่องวด เช่น งวดที่ 1",el:<input type="text" placeholder="งวดที่ 1" value={instForm.name} onChange={e=>setInstForm(f=>({...f,name:e.target.value}))}/>},
                 {label:"ยอดเงินงวด (บาท)",el:<input type="number" inputMode="decimal" placeholder="0.00" value={instForm.amount} onChange={e=>setInstForm(f=>({...f,amount:e.target.value}))}/>},
-                {label:"วันครบกำหนดเบิก",el:<input type="date" value={instForm.dueDate} onChange={e=>setInstForm(f=>({...f,dueDate:e.target.value}))}/>},
+                {label:instForm.kind==="payable"?"วันครบกำหนดจ่าย":"วันครบกำหนดเบิก",el:<input type="date" value={instForm.dueDate} onChange={e=>setInstForm(f=>({...f,dueDate:e.target.value}))}/>},
               ].map(({label,el})=>(
                 <div key={label}>
                   <label style={{ fontSize:12,color:"#aaa",fontWeight:700,display:"block",marginBottom:6 }}>{label}</label>
@@ -693,7 +931,7 @@ export default function App() {
               ))}
               <div style={{ display:"flex",gap:10,marginTop:4 }}>
                 <button className="btn btn-ghost" onClick={()=>setShowInstForm(false)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
-                <button className="btn btn-primary" onClick={addInstallment} style={{ flex:2,padding:13 }}>บันทึกงวด</button>
+                <button className="btn btn-primary" onClick={addInstallment} style={{ flex:2,padding:13 }}>บันทึก{instLabel(instForm.kind)}</button>
               </div>
             </div>
           </div>
