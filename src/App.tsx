@@ -176,16 +176,6 @@ export default function App() {
     });
   }, [notifGranted, installments]);
 
-  // VAT due notification on the 15th
-  useEffect(() => {
-    if (!notifGranted) return;
-    if (!vatDueInfo.isDueToday || vatDueInfo.amount <= 0) return;
-    new Notification("🧾 วันนี้ครบกำหนดยื่น VAT", {
-      body: `VAT เดือน ${vatDueInfo.monthStr} — ต้องนำส่ง ฿${fmt(vatDueInfo.amount)}`,
-      icon: "/favicon.ico"
-    });
-  }, [notifGranted, vatDueInfo]);
-
   async function requestNotifPermission() {
     if (!("Notification" in window)) { showToast("เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน", "err"); return; }
     const result = await Notification.requestPermission();
@@ -332,6 +322,16 @@ export default function App() {
 
   // Near-due / overdue payables (3-day window)
   const urgentPayables = useMemo(()=>installments.filter(i=>i.kind==="payable"&&i.status==="pending"&&daysUntil(i.dueDate)<=3),[installments]);
+
+  // VAT due notification on the 15th
+  useEffect(() => {
+    if (!notifGranted) return;
+    if (!vatDueInfo.isDueToday || vatDueInfo.amount <= 0) return;
+    new Notification("🧾 วันนี้ครบกำหนดยื่น VAT", {
+      body: `VAT เดือน ${vatDueInfo.monthStr} — ต้องนำส่ง ฿${fmt(vatDueInfo.amount)}`,
+      icon: "/favicon.ico"
+    });
+  }, [notifGranted, vatDueInfo]);
 
   const hasUserFilter = filterType!=="all"||filterProject!=="all"||!!dateFrom||!!dateTo;
   const filtered = useMemo(()=>{
