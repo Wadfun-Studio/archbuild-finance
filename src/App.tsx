@@ -14,6 +14,252 @@ const fmtDate = (d: string) => { if (!d) return ""; return new Date(d).toLocaleD
 const today = () => new Date().toISOString().slice(0, 10);
 const daysUntil = (d: string) => Math.ceil((new Date(d).getTime() - new Date().getTime()) / 86400000);
 
+// Thai number-to-words (baht)
+function bahtText(num: number): string {
+  const digits = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
+  const positions = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน"];
+  const readSix = (n: number): string => {
+    if (n === 0) return "";
+    const s = String(n).padStart(6, "0");
+    let r = "";
+    for (let i = 0; i < 6; i++) {
+      const d = +s[i];
+      const pos = 5 - i;
+      if (d === 0) continue;
+      let dg = digits[d];
+      if (pos === 0 && d === 1 && i < 5) dg = "เอ็ด";
+      else if (pos === 1 && d === 1) dg = "";
+      else if (pos === 1 && d === 2) dg = "ยี่";
+      r += dg + positions[pos];
+    }
+    return r;
+  };
+  const readAll = (n: number): string => {
+    if (n === 0) return "";
+    const million = Math.floor(n / 1000000);
+    const rem = n % 1000000;
+    let r = "";
+    if (million > 0) r += readAll(million) + "ล้าน";
+    if (rem > 0) r += readSix(rem);
+    return r;
+  };
+  const abs = Math.abs(num);
+  const baht = Math.floor(abs);
+  const satang = Math.round((abs - baht) * 100);
+  if (baht === 0 && satang === 0) return "ศูนย์บาทถ้วน";
+  let r = "";
+  if (baht > 0) r += readAll(baht) + "บาท";
+  if (satang > 0) r += readAll(satang) + "สตางค์";
+  else if (baht > 0) r += "ถ้วน";
+  return r;
+}
+
+// Running number with prefix, stored in localStorage
+function nextRunningNumber(prefix: string, storageKey: string): string {
+  const n = parseInt(localStorage.getItem(storageKey) || "0", 10) + 1;
+  localStorage.setItem(storageKey, String(n));
+  return `${prefix}${String(n).padStart(3, "0")}`;
+}
+
+// Company info constant
+const COMPANY = {
+  name: "WADFUN STUDIO CO.,LTD.",
+  branch: "(Head office)",
+  address: "168/62 Moo 7 Bangrakpattana Bangbuathong Nonthaburi",
+  email: "Wadfunstudio@gmail.com",
+  taxId: "0125568023564",
+  tel: "065-659-4263",
+  bankName: "SCB BANK",
+  accName: "Wadfun studio limited",
+  accNo: "413-230927-7",
+  approver: "นายอธิวัฒน์ กองชัย",
+};
+
+// Build the document HTML for one page (ต้นฉบับ or สำเนา)
+function buildDocHTML(opts: {
+  kind: "invoice"|"receipt";
+  copyLabel: "ต้นฉบับ"|"สำเนา";
+  docNo: string;
+  dateStr: string;
+  customerName: string;
+  itemName: string;
+  amount: number;
+}): string {
+  const isInv = opts.kind === "invoice";
+  const titleEn = isInv ? "Invoice" : "TAX INVOICE/RECEIPT";
+  const titleTh = isInv ? "ใบแจ้งหนี้" : "ใบกำกับภาษี/ใบเสร็จรับเงิน";
+  const vat = opts.amount * 0.07;
+  const wht = isInv ? 0 : opts.amount * 0.03;
+  const total = opts.amount + vat;
+  const grandTotal = total - wht;
+  const signerLeftRole = isInv ? "ผู้อนุมัติ" : "ผู้รับเงิน";
+  const signerLeftName = isInv ? `(${COMPANY.approver}) ตัวแทนขาย` : `(คุณ${COMPANY.approver.replace(/^นาย/,"")}) ตัวแทนขาย`;
+  const signerRightRole = isInv ? "ผู้รับใบแจ้งหนี้" : "ผู้จ่ายเงิน";
+  const signerRightName = `(${opts.customerName}) ผู้อนุมัติ`;
+
+  return `
+<div style="width:794px;background:#fff;padding:36px 44px;font-family:'Sarabun',sans-serif;color:#111;box-sizing:border-box;font-size:13px;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:14px;">
+    <div style="display:flex;align-items:center;gap:14px;">
+      <img src="/logo.jpg" style="height:64px;width:auto;" crossorigin="anonymous" onerror="this.style.display='none'"/>
+      <div>
+        <div style="font-size:18px;font-weight:800;">${COMPANY.name}</div>
+        <div style="font-size:11px;color:#666;">${COMPANY.branch}</div>
+      </div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-size:24px;font-weight:800;letter-spacing:.04em;">${titleEn}</div>
+      <div style="font-size:14px;font-weight:600;">${titleTh}</div>
+      <div style="color:#c62828;font-weight:800;font-size:14px;margin-top:2px;">${opts.copyLabel}</div>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;gap:20px;margin-top:14px;font-size:12px;">
+    <div style="flex:1;">
+      <div style="font-weight:700;margin-bottom:4px;">ผู้ออก</div>
+      <div>${COMPANY.name} ${COMPANY.branch}</div>
+      <div>${COMPANY.address}</div>
+      <div>Email: ${COMPANY.email}</div>
+      <div>เลขประจำตัวผู้เสียภาษี: ${COMPANY.taxId}</div>
+      <div>โทร: ${COMPANY.tel}</div>
+    </div>
+    <div style="min-width:240px;text-align:right;">
+      <div><b>เลขที่:</b> ${opts.docNo}</div>
+      <div><b>วันที่:</b> ${opts.dateStr}</div>
+      <div style="margin-top:10px;text-align:left;background:#f5f5f5;padding:8px 10px;border-radius:6px;">
+        <div style="font-weight:700;font-size:11px;color:#666;">ลูกค้า / Customer</div>
+        <div style="font-size:14px;font-weight:700;">${opts.customerName}</div>
+      </div>
+    </div>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;margin-top:18px;font-size:12px;">
+    <thead>
+      <tr style="background:#1565c0;color:#fff;">
+        <th style="padding:8px;border:1px solid #1565c0;width:44px;">ลำดับ</th>
+        <th style="padding:8px;border:1px solid #1565c0;text-align:left;">รายการ</th>
+        <th style="padding:8px;border:1px solid #1565c0;width:60px;">จำนวน</th>
+        <th style="padding:8px;border:1px solid #1565c0;width:110px;">ราคา/หน่วย</th>
+        <th style="padding:8px;border:1px solid #1565c0;width:110px;">ราคารวม</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="padding:8px;border:1px solid #ccc;text-align:center;">1</td>
+        <td style="padding:8px;border:1px solid #ccc;">${opts.itemName} — โครงการ ${opts.customerName}</td>
+        <td style="padding:8px;border:1px solid #ccc;text-align:center;">1</td>
+        <td style="padding:8px;border:1px solid #ccc;text-align:right;">${fmt(opts.amount)}</td>
+        <td style="padding:8px;border:1px solid #ccc;text-align:right;">${fmt(opts.amount)}</td>
+      </tr>
+      ${Array.from({length:6}).map(()=>`
+      <tr>
+        <td style="padding:8px;border:1px solid #ccc;height:22px;">&nbsp;</td>
+        <td style="padding:8px;border:1px solid #ccc;"></td>
+        <td style="padding:8px;border:1px solid #ccc;"></td>
+        <td style="padding:8px;border:1px solid #ccc;"></td>
+        <td style="padding:8px;border:1px solid #ccc;"></td>
+      </tr>`).join("")}
+    </tbody>
+  </table>
+
+  <div style="display:flex;gap:16px;margin-top:16px;font-size:12px;">
+    <div style="flex:1;border:1px solid #ccc;border-radius:6px;padding:10px 12px;">
+      <div style="font-weight:700;margin-bottom:6px;">จำนวนเงิน (ตัวอักษร)</div>
+      <div style="font-style:italic;">( ${bahtText(grandTotal)} )</div>
+    </div>
+    <div style="width:240px;">
+      <div style="display:flex;justify-content:space-between;padding:4px 0;"><span>ราคารวม</span><span>${fmt(opts.amount)}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0;"><span>VAT 7%</span><span>${fmt(vat)}</span></div>
+      ${!isInv?`<div style="display:flex;justify-content:space-between;padding:4px 0;color:#c62828;"><span>หัก ณ ที่จ่าย 3%</span><span>-${fmt(wht)}</span></div>`:""}
+      <div style="display:flex;justify-content:space-between;padding:8px 0;border-top:2px solid #111;font-weight:800;font-size:13px;">
+        <span>เงินรวมทั้งสิ้น</span><span>${fmt(grandTotal)}</span>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:16px;display:flex;gap:16px;font-size:11.5px;">
+    <div style="flex:1;border:1px solid #ccc;border-radius:6px;padding:10px 12px;">
+      <div style="font-weight:700;margin-bottom:6px;">ช่องทางชำระเงิน / Payment</div>
+      <div>ชื่อบัญชี: ${COMPANY.accName}</div>
+      <div>ธนาคาร: ${COMPANY.bankName}</div>
+      <div>เลขที่บัญชี: ${COMPANY.accNo}</div>
+    </div>
+    <div style="flex:1;border:1px solid #ccc;border-radius:6px;padding:10px 12px;">
+      <div style="font-weight:700;margin-bottom:6px;">เงื่อนไข / Terms</div>
+      <div>- Payment must be made within 7 days</div>
+      <div>- Bank transfer only</div>
+      <div>- Please send proof of payment via email</div>
+    </div>
+  </div>
+
+  <div style="margin-top:38px;display:flex;gap:30px;font-size:12px;">
+    <div style="flex:1;text-align:center;">
+      <div style="border-top:1px dotted #888;padding-top:6px;margin-top:34px;">
+        <div style="font-weight:700;">${signerLeftRole}</div>
+        <div>${signerLeftName}</div>
+        <div style="color:#888;font-size:11px;margin-top:2px;">วันที่ ......./......./.......</div>
+      </div>
+    </div>
+    <div style="flex:1;text-align:center;">
+      <div style="border-top:1px dotted #888;padding-top:6px;margin-top:34px;">
+        <div style="font-weight:700;">${signerRightRole}</div>
+        <div>${signerRightName}</div>
+        <div style="color:#888;font-size:11px;margin-top:2px;">วันที่ ......./......./.......</div>
+      </div>
+    </div>
+  </div>
+</div>`;
+}
+
+// Generate two-page PDF (ต้นฉบับ + สำเนา) and trigger download
+async function generateDocPDF(kind: "invoice"|"receipt", opts: {
+  docNo: string;
+  customerName: string;
+  itemName: string;
+  amount: number;
+}) {
+  const [{ default: html2canvas }, jsPDFmod] = await Promise.all([
+    import("html2canvas"),
+    import("jspdf"),
+  ]);
+  const jsPDF = jsPDFmod.jsPDF || jsPDFmod.default;
+
+  const dateStr = new Date().toLocaleDateString("th-TH", { day:"2-digit", month:"long", year:"numeric" });
+  const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+
+  for (const copyLabel of ["ต้นฉบับ","สำเนา"] as const) {
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:-99999px;top:0;background:#fff;z-index:-1;";
+    host.innerHTML = buildDocHTML({ kind, copyLabel, dateStr, ...opts });
+    document.body.appendChild(host);
+    // Wait for logo image to load (if present)
+    const img = host.querySelector("img") as HTMLImageElement | null;
+    if (img && !img.complete) {
+      await new Promise<void>(resolve => {
+        img.onload = () => resolve();
+        img.onerror = () => resolve();
+        setTimeout(() => resolve(), 1500);
+      });
+    }
+    const canvas = await html2canvas(host.firstElementChild as HTMLElement, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
+    document.body.removeChild(host);
+
+    const imgData = canvas.toDataURL("image/png");
+    // Fit width to page, scale height proportionally, then if too tall, cap at page height
+    let imgW = pageW;
+    let imgH = (canvas.height * pageW) / canvas.width;
+    if (imgH > pageH) { imgH = pageH; imgW = (canvas.width * pageH) / canvas.height; }
+    const x = (pageW - imgW) / 2;
+    const y = 0;
+    if (copyLabel === "สำเนา") pdf.addPage();
+    pdf.addImage(imgData, "PNG", x, y, imgW, imgH);
+  }
+
+  pdf.save(`${kind === "invoice" ? "Invoice" : "Receipt"}_${opts.docNo.replace("/","-")}.pdf`);
+}
+
 async function apiGet(action: string, params: Record<string,string> = {}) {
   const url = new URL(API);
   url.searchParams.set("action", action);
@@ -29,7 +275,7 @@ async function apiPost(action: string, body: object = {}) {
 interface Entry { id: number; date: string; type: string; category: string; project: string; description: string; amount: number; vat?: number; wht?: number; }
 type InstKind = "receivable"|"payable";
 type InstStatus = "pending"|"received"|"paid";
-interface Installment { id: number; kind: InstKind; project: string; name: string; amount: number; dueDate: string; status: InstStatus; }
+interface Installment { id: number; kind: InstKind; project: string; name: string; amount: number; dueDate: string; status: InstStatus; invoiceNo?: string; receiptNo?: string; }
 interface FormState { date: string; type: string; category: string; project: string; description: string; amount: string; useVat: boolean; useWht: boolean; }
 interface InstForm { kind: InstKind; project: string; name: string; amount: string; dueDate: string; }
 
@@ -167,6 +413,32 @@ export default function App() {
   function toggleInstallment(inst: Installment) {
     const next: InstStatus = inst.status === "pending" ? instDoneStatus(inst.kind) : "pending";
     saveInstallments(installments.map(i => i.id === inst.id ? {...i, status: next} : i));
+  }
+
+  async function handleInvoice(inst: Installment) {
+    let invoiceNo = inst.invoiceNo;
+    if (!invoiceNo) {
+      invoiceNo = nextRunningNumber("6905/", "wf_invoice_counter");
+      saveInstallments(installments.map(i => i.id === inst.id ? { ...i, invoiceNo } : i));
+    }
+    showToast("กำลังสร้างใบวางบิล...");
+    try {
+      await generateDocPDF("invoice", { docNo: invoiceNo, customerName: inst.project, itemName: inst.name, amount: inst.amount });
+      showToast("สร้างใบวางบิลสำเร็จ");
+    } catch (e) { console.error(e); showToast("สร้าง PDF ไม่สำเร็จ", "err"); }
+  }
+
+  async function handleReceipt(inst: Installment) {
+    let receiptNo = inst.receiptNo;
+    if (!receiptNo) {
+      receiptNo = nextRunningNumber("RE6905/", "wf_receipt_counter");
+      saveInstallments(installments.map(i => i.id === inst.id ? { ...i, receiptNo } : i));
+    }
+    showToast("กำลังสร้างใบเสร็จ...");
+    try {
+      await generateDocPDF("receipt", { docNo: receiptNo, customerName: inst.project, itemName: inst.name, amount: inst.amount });
+      showToast("สร้างใบเสร็จสำเร็จ");
+    } catch (e) { console.error(e); showToast("สร้าง PDF ไม่สำเร็จ", "err"); }
   }
 
   function deleteInstallment(id: number) {
@@ -874,6 +1146,14 @@ export default function App() {
                       📅 {fmtDate(inst.dueDate)}
                       {inst.status==="pending"&&(isOverdue?` — เลยกำหนด ${Math.abs(days)} วัน`:` — อีก ${days} วัน`)}
                     </div>
+                    {inst.kind==="receivable"&&(
+                      <div style={{ display:"flex",gap:8,marginTop:12 }}>
+                        <button className="btn btn-outline" onClick={()=>handleInvoice(inst)} style={{ flex:1,fontSize:13,padding:8 }} title={inst.invoiceNo?`เลขที่ ${inst.invoiceNo}`:"สร้างใหม่"}>📄 ใบวางบิล{inst.invoiceNo?` (${inst.invoiceNo})`:""}</button>
+                        {inst.status==="received"&&(
+                          <button className="btn btn-primary" onClick={()=>handleReceipt(inst)} style={{ flex:1,fontSize:13,padding:8 }} title={inst.receiptNo?`เลขที่ ${inst.receiptNo}`:"สร้างใหม่"}>🧾 ใบเสร็จ{inst.receiptNo?` (${inst.receiptNo})`:""}</button>
+                        )}
+                      </div>
+                    )}
                     <div style={{ display:"flex",gap:8,marginTop:12 }}>
                       {inst.status==="pending"
                         ?<button className="btn btn-green" onClick={()=>toggleInstallment(inst)} style={{ flex:1,fontSize:13,padding:8 }}>✅ {instDoneLabel(inst.kind)}</button>
