@@ -127,6 +127,11 @@ export default function App() {
   const [notifGranted, setNotifGranted] = useState(false);
   const [selectedProject, setSelectedProject] = useState<string|null>(null);
   const [showNotifPopup, setShowNotifPopup] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string,boolean>>({});
+
+  function toggleGroup(key: string) {
+    setCollapsedGroups(s => ({ ...s, [key]: !s[key] }));
+  }
 
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null);
@@ -270,18 +275,24 @@ export default function App() {
   const totalWht = useMemo(()=>entries.reduce((s,e)=>s+(e.wht||0),0),[entries]);
   const net = totalIncome - totalExpense;
 
-  const filtered = useMemo(()=>entries.filter(e=>{
-    if (filterType!=="all"&&e.type!==filterType) return false;
-    if (filterProject!=="all"&&e.project!==filterProject) return false;
-    if (dateFrom&&String(e.date).slice(0,10)<dateFrom) return false;
-    if (dateTo&&String(e.date).slice(0,10)>dateTo) return false;
-    return true;
-  }).sort((a,b)=>String(b.date).localeCompare(String(a.date))),[entries,filterType,filterProject,dateFrom,dateTo]);
+  const hasUserFilter = filterType!=="all"||filterProject!=="all"||!!dateFrom||!!dateTo;
+  const filtered = useMemo(()=>{
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-5);
+    const cutoffStr = cutoff.toISOString().slice(0,10);
+    return entries.filter(e=>{
+      if (filterType!=="all"&&e.type!==filterType) return false;
+      if (filterProject!=="all"&&e.project!==filterProject) return false;
+      if (dateFrom&&String(e.date).slice(0,10)<dateFrom) return false;
+      if (dateTo&&String(e.date).slice(0,10)>dateTo) return false;
+      // Default window: last 5 days when no user filter is set
+      if (!hasUserFilter && String(e.date).slice(0,10) < cutoffStr) return false;
+      return true;
+    }).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  },[entries,filterType,filterProject,dateFrom,dateTo,hasUserFilter]);
 
   const filteredIncome = filtered.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
   const filteredExpense = filtered.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
   const cats = form.type==="income"?CATS_IN:CATS_EX;
-  const hasFilter = filterType!=="all"||filterProject!=="all"||dateFrom||dateTo;
 
   const pendingInst = installments.filter(i=>i.status==="pending");
   const urgentInst = pendingInst.filter(i=>daysUntil(i.dueDate)<=7&&daysUntil(i.dueDate)>=0);
@@ -438,11 +449,16 @@ export default function App() {
                   const gIncome = list.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
                   const gExpense = list.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
                   const gNet = gIncome - gExpense;
+                  const groupKey = `dash:${projName}`;
+                  const collapsed = !!collapsedGroups[groupKey];
                   return (
-                    <div key={projName} style={{ marginTop:gIdx===0?0:18 }}>
-                      <div style={{ background:"linear-gradient(90deg,#eff3fb,transparent)",borderLeft:"4px solid #1565c0",padding:"10px 12px",borderRadius:"8px 8px 0 0",marginBottom:4 }}>
+                    <div key={projName} style={{ marginTop:gIdx===0?0:14 }}>
+                      <button onClick={()=>toggleGroup(groupKey)} aria-expanded={!collapsed} style={{ width:"100%",textAlign:"left",cursor:"pointer",background:"linear-gradient(90deg,#eff3fb,transparent)",border:"none",borderLeft:"4px solid #1565c0",padding:"10px 12px",borderRadius:"8px 8px 0 0",marginBottom:collapsed?0:4,fontFamily:"inherit" }}>
                         <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8 }}>
-                          <span style={{ fontWeight:800,fontSize:15,color:"#1a1a2e" }}>📁 {projName}</span>
+                          <span style={{ fontWeight:800,fontSize:15,color:"#1a1a2e",display:"flex",alignItems:"center",gap:6 }}>
+                            <span style={{ display:"inline-block",transform:collapsed?"rotate(-90deg)":"rotate(0)",transition:"transform .15s",color:"#1565c0",fontSize:12 }}>▼</span>
+                            📁 {projName}
+                          </span>
                           <span style={{ fontSize:11,color:"#888",fontWeight:600 }}>{list.length} รายการ</span>
                         </div>
                         <div style={{ display:"flex",gap:10,marginTop:4,fontSize:12,flexWrap:"wrap" }}>
@@ -450,8 +466,8 @@ export default function App() {
                           <span style={{ color:"#c62828",fontWeight:700 }}>↓ ฿{fmt(gExpense)}</span>
                           <span style={{ color:gNet>=0?"#1565c0":"#c62828",fontWeight:800,marginLeft:"auto" }}>สุทธิ {gNet>=0?"+":""}฿{fmt(gNet)}</span>
                         </div>
-                      </div>
-                      {list.map((e,i)=>(
+                      </button>
+                      {!collapsed&&list.map((e,i)=>(
                         <div key={e.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderBottom:i<list.length-1?"1px solid #f5f5f5":"none" }}>
                           <div style={{ width:34,height:34,borderRadius:10,background:e.type==="income"?"#e8f5e9":"#ffebee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0 }}>{e.type==="income"?"↑":"↓"}</div>
                           <div style={{ flex:1,minWidth:0 }}>
@@ -492,8 +508,9 @@ export default function App() {
                 <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{ flex:1,fontSize:14 }}/>
                 <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{ flex:1,fontSize:14 }}/>
               </div>
-              <div style={{ display:"flex",gap:8,marginTop:10,alignItems:"center" }}>
-                {hasFilter&&<button className="btn btn-ghost" style={{ fontSize:12,padding:"7px 12px" }} onClick={()=>{setFilterType("all");setFilterProject("all");setDateFrom("");setDateTo("");}}>✕ ล้าง</button>}
+              <div style={{ display:"flex",gap:8,marginTop:10,alignItems:"center",flexWrap:"wrap" }}>
+                {!hasUserFilter&&<span style={{ fontSize:11,color:"#1565c0",background:"#e3f2fd",padding:"4px 10px",borderRadius:20,fontWeight:600 }}>📅 5 วันล่าสุด</span>}
+                {hasUserFilter&&<button className="btn btn-ghost" style={{ fontSize:12,padding:"7px 12px" }} onClick={()=>{setFilterType("all");setFilterProject("all");setDateFrom("");setDateTo("");}}>✕ ล้าง</button>}
                 <button className="btn btn-outline" style={{ fontSize:12,padding:"7px 12px" }} onClick={exportCSV}>⬇ CSV</button>
                 <span style={{ marginLeft:"auto",fontSize:12,color:"#aaa" }}>{filtered.length} รายการ</span>
               </div>
@@ -507,7 +524,7 @@ export default function App() {
                 </div>
               )}
             </div>
-            {filtered.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"48px 0",fontSize:14 }}>ไม่พบรายการ</div>
+            {filtered.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"48px 0",fontSize:14 }}>{hasUserFilter?"ไม่พบรายการ":"ไม่มีรายการใน 5 วันล่าสุด"}</div>
             :filtered.map(e=>(
               <div key={e.id} className="card" style={{ padding:"14px 16px" }}>
                 <div style={{ display:"flex",alignItems:"flex-start",gap:12 }}>
@@ -540,6 +557,9 @@ export default function App() {
                 </div>
               </div>
             ))}
+            <button className="btn btn-primary" onClick={()=>setView("installments")} style={{ width:"100%",padding:14,fontSize:14,marginTop:4 }}>
+              📑 ดู Statement ทั้งหมด (แยกตามโครงการ) →
+            </button>
           </div>
         )}
 
