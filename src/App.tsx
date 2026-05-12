@@ -361,6 +361,8 @@ export default function App() {
   const [selectedProject, setSelectedProject] = useState<string|null>(null);
   const [showNotifPopup, setShowNotifPopup] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string,boolean>>({});
+  const [sheetSetupDismissed, setSheetSetupDismissed] = useState<boolean>(()=>localStorage.getItem("wf_sheet_setup_dismissed")==="1");
+  function dismissSheetSetup() { localStorage.setItem("wf_sheet_setup_dismissed","1"); setSheetSetupDismissed(true); }
   const [projectTax, setProjectTax] = useState<Record<string, ProjectTaxSettings>>({});
   const [pendingTaxPropagate, setPendingTaxPropagate] = useState<{ name: string; next: ProjectTaxSettings }|null>(null);
 
@@ -776,6 +778,28 @@ export default function App() {
         {/* DASHBOARD */}
         {view==="dashboard"&&(
           <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
+            {/* Google Sheet setup notice */}
+            {!sheetSetupDismissed&&(
+              <div style={{ background:"#fffde7",border:"1.5px solid #fff59d",borderRadius:14,padding:"14px 16px" }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8 }}>
+                  <div style={{ fontWeight:700,fontSize:13,color:"#827717" }}>⚙️ ตั้งค่า Google Sheet ก่อนใช้งานจริง</div>
+                  <button onClick={dismissSheetSetup} aria-label="ปิด" style={{ width:24,height:24,borderRadius:"50%",border:"none",background:"#f0e68c",fontSize:13,fontWeight:700,cursor:"pointer",color:"#666",lineHeight:1 }}>✕</button>
+                </div>
+                <div style={{ fontSize:12,color:"#5d4037",marginBottom:8 }}>
+                  เพื่อให้ VAT / WHT บันทึกถาวร เพิ่ม column ในชีต <b>Entries</b> ดังนี้:
+                </div>
+                <div style={{ fontFamily:"monospace",fontSize:12,background:"#fff8e1",borderRadius:8,padding:"8px 10px",marginBottom:8 }}>
+                  H = vat<br/>
+                  I = wht<br/>
+                  J = vatType  <span style={{ color:"#888" }}>(output / input)</span><br/>
+                  K = whtType  <span style={{ color:"#888" }}>(withheld / withhold)</span>
+                </div>
+                <div style={{ fontSize:11,color:"#777" }}>
+                  ดูตัวอย่าง backend ที่ <b>Code.gs</b> ใน repo — copy ไปแทนใน Apps Script แล้ว Deploy เวอร์ชันใหม่
+                </div>
+              </div>
+            )}
+
             {/* Urgent installments alert */}
             {urgentInst.length>0&&(
               <div style={{ background:"#fff3e0",border:"1.5px solid #ffb74d",borderRadius:14,padding:"14px 16px" }}>
