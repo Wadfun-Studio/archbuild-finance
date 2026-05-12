@@ -507,6 +507,49 @@ export default function App() {
               <Donut income={totalIncome} expense={totalExpense}/>
             </div>
 
+            {/* Cash Flow table — historical from entries */}
+            <div className="card" style={{ padding:20 }}>
+              <div className="stitle">💧 กระแสเงินสดรายเดือน (ย้อนหลัง)</div>
+              <div style={{ fontSize:11,color:"#aaa",marginTop:-8,marginBottom:12 }}>ข้อมูลจริงจากรายการรายรับ-รายจ่าย</div>
+              {monthlyCashflow.length===0?(
+                <div style={{ color:"#bbb",fontSize:13,textAlign:"center",padding:"16px 0" }}>ยังไม่มีข้อมูล</div>
+              ):(
+                <div style={{ overflowX:"auto",marginTop:6 }}>
+                  <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:480 }}>
+                    <thead>
+                      <tr style={{ borderBottom:"2px solid #e0e4f0" }}>
+                        <th style={{ textAlign:"left",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>เดือน</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#2e7d32",fontSize:11,fontWeight:700 }}>เงินเข้า</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#c62828",fontSize:11,fontWeight:700 }}>เงินออก</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>สุทธิ</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>คงเหลือสะสม</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthlyCashflow.slice(-12).map(r=>{
+                        const [y,m] = r.month.split("-");
+                        const label = new Date(+y,+m-1).toLocaleDateString("th-TH",{month:"short",year:"2-digit"});
+                        const negRow = r.net<0;
+                        return (
+                          <tr key={r.month} style={{ background:negRow?"#ffebee":"transparent",borderBottom:"1px solid #f5f5f5" }}>
+                            <td style={{ padding:"10px 6px",fontWeight:600 }}>{label}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#2e7d32",fontWeight:600 }}>+฿{fmt(r.inflow)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#c62828",fontWeight:600 }}>-฿{fmt(r.outflow)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:800,color:negRow?"#c62828":"#2e7d32" }}>{negRow?"":"+"}฿{fmt(r.net)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:700,color:r.cumulative<0?"#c62828":"#1565c0" }}>฿{fmt(r.cumulative)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {monthlyCashflow.some(r=>r.net<0)&&(
+                <div style={{ marginTop:8,fontSize:11,color:"#c62828",fontWeight:600 }}>⚠️ มีเดือนที่เงินติดลบ — ตรวจสอบการบริหารกระแสเงินสด</div>
+              )}
+            </div>
+
+            {/* Cash Flow Forecast — 3 months ahead from pending installments */}
             <div className="card" style={{ padding:20 }}>
               <div className="stitle">🔮 Cash Flow Forecast (3 เดือนข้างหน้า)</div>
               <div style={{ fontSize:11,color:"#aaa",marginTop:-8,marginBottom:12 }}>คาดการณ์จากงวดเบิก/งวดจ่ายที่ยังค้าง</div>
@@ -552,47 +595,6 @@ export default function App() {
                   </div>
                 );
               })()}
-            </div>
-
-            {/* Cash Flow table */}
-            <div className="card" style={{ padding:20 }}>
-              <div className="stitle">💧 กระแสเงินสดรายเดือน (Cash Flow)</div>
-              {monthlyCashflow.length===0?(
-                <div style={{ color:"#bbb",fontSize:13,textAlign:"center",padding:"16px 0" }}>ยังไม่มีข้อมูล</div>
-              ):(
-                <div style={{ overflowX:"auto",marginTop:6 }}>
-                  <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:480 }}>
-                    <thead>
-                      <tr style={{ borderBottom:"2px solid #e0e4f0" }}>
-                        <th style={{ textAlign:"left",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>เดือน</th>
-                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#2e7d32",fontSize:11,fontWeight:700 }}>เงินเข้า</th>
-                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#c62828",fontSize:11,fontWeight:700 }}>เงินออก</th>
-                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>สุทธิ</th>
-                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>คงเหลือสะสม</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {monthlyCashflow.slice(-12).map(r=>{
-                        const [y,m] = r.month.split("-");
-                        const label = new Date(+y,+m-1).toLocaleDateString("th-TH",{month:"short",year:"2-digit"});
-                        const negRow = r.net<0;
-                        return (
-                          <tr key={r.month} style={{ background:negRow?"#ffebee":"transparent",borderBottom:"1px solid #f5f5f5" }}>
-                            <td style={{ padding:"10px 6px",fontWeight:600 }}>{label}</td>
-                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#2e7d32",fontWeight:600 }}>+฿{fmt(r.inflow)}</td>
-                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#c62828",fontWeight:600 }}>-฿{fmt(r.outflow)}</td>
-                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:800,color:negRow?"#c62828":"#2e7d32" }}>{negRow?"":"+"}฿{fmt(r.net)}</td>
-                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:700,color:r.cumulative<0?"#c62828":"#1565c0" }}>฿{fmt(r.cumulative)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {monthlyCashflow.some(r=>r.net<0)&&(
-                <div style={{ marginTop:8,fontSize:11,color:"#c62828",fontWeight:600 }}>⚠️ มีเดือนที่เงินติดลบ — ตรวจสอบการบริหารกระแสเงินสด</div>
-              )}
             </div>
 
             <div className="card" style={{ padding:20 }}>
