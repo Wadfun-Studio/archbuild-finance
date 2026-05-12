@@ -126,6 +126,7 @@ export default function App() {
   const [showTaxSummary, setShowTaxSummary] = useState(false);
   const [notifGranted, setNotifGranted] = useState(false);
   const [selectedProject, setSelectedProject] = useState<string|null>(null);
+  const [showNotifPopup, setShowNotifPopup] = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true); setError(null);
@@ -199,9 +200,9 @@ export default function App() {
 
   function showToast(msg: string, type="ok") { setToast({msg, type}); setTimeout(()=>setToast(null), 2800); }
 
-  function openAdd() {
+  function openAdd(type: "income"|"expense" = "income") {
     setEditId(null);
-    setForm({ date:today(), type:"income", category:CATS_IN[0], project:projects[0]||"", description:"", amount:"", useVat:false, useWht:false });
+    setForm({ date:today(), type, category: type==="income"?CATS_IN[0]:CATS_EX[0], project:projects[0]||"", description:"", amount:"", useVat:false, useWht:false });
     setShowForm(true);
   }
   function openEdit(e: Entry) { setEditId(e.id); setForm({...e, amount:String(e.amount), useVat:!!e.vat, useWht:!!e.wht}); setShowForm(true); }
@@ -268,12 +269,6 @@ export default function App() {
   const totalVat = useMemo(()=>entries.reduce((s,e)=>s+(e.vat||0),0),[entries]);
   const totalWht = useMemo(()=>entries.reduce((s,e)=>s+(e.wht||0),0),[entries]);
   const net = totalIncome - totalExpense;
-
-  const projectStats = useMemo(()=>{
-    const map: Record<string,{income:number,expense:number}> = {};
-    entries.forEach(e=>{ if(!map[e.project]) map[e.project]={income:0,expense:0}; map[e.project][e.type as "income"|"expense"]+=e.amount; });
-    return Object.entries(map).map(([name,v])=>({name,...v,net:v.income-v.expense})).sort((a,b)=>b.net-a.net);
-  },[entries]);
 
   const filtered = useMemo(()=>entries.filter(e=>{
     if (filterType!=="all"&&e.type!==filterType) return false;
@@ -354,9 +349,10 @@ export default function App() {
                 <div style={{ fontSize:10,color:"#bbb" }}>ระบบบัญชีรายรับ-รายจ่าย</div>
               </div>
             </div>
-            <div style={{ display:"flex",gap:8 }}>
-              {!notifGranted && <button className="btn btn-ghost" style={{ fontSize:11,padding:"6px 10px" }} onClick={requestNotifPermission}>🔔 เปิดแจ้งเตือน</button>}
-              {urgentInst.length>0 && <div style={{ background:"#c62828",color:"#fff",borderRadius:50,width:20,height:20,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700 }}>{urgentInst.length}</div>}
+            <div style={{ display:"flex",gap:8,alignItems:"center" }}>
+              <button className="btn btn-ghost" style={{ fontSize:13,padding:"6px 10px",position:"relative" }} onClick={()=>setShowNotifPopup(true)}>
+                🔔{urgentInst.length>0&&<span style={{ position:"absolute",top:-2,right:-2,background:"#c62828",color:"#fff",borderRadius:50,minWidth:16,height:16,padding:"0 4px",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700 }}>{urgentInst.length}</span>}
+              </button>
               <button className="btn btn-ghost" style={{ fontSize:12,padding:"8px 12px" }} onClick={loadAll}>🔄</button>
             </div>
           </div>
@@ -431,25 +427,47 @@ export default function App() {
                 <button className="btn btn-ghost" style={{ fontSize:12,padding:"6px 12px" }} onClick={()=>setView("list")}>ดูทั้งหมด →</button>
               </div>
               {entries.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"32px 0",fontSize:14 }}>ยังไม่มีรายการ</div>
-              :[...entries].sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,6).map((e,i,arr)=>(
-                <div key={e.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:i<arr.length-1?"1px solid #f5f5f5":"none" }}>
-                  <div style={{ width:38,height:38,borderRadius:12,background:e.type==="income"?"#e8f5e9":"#ffebee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0 }}>
-                    {e.type==="income"?"↑":"↓"}
-                  </div>
-                  <div style={{ flex:1,minWidth:0 }}>
-                    <div style={{ fontSize:14,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.description}</div>
-                    <div style={{ fontSize:11,color:"#bbb",marginTop:2 }}>{e.category} · {fmtDate(String(e.date).slice(0,10))}</div>
-                  </div>
-                  <div style={{ textAlign:"right",flexShrink:0 }}>
-                    <div style={{ fontWeight:800,fontSize:14,color:e.type==="income"?"#2e7d32":"#c62828" }}>
-                      {e.type==="income"?"+":"-"}฿{fmt(e.amount)}
+              :(()=>{
+                const recent = [...entries].sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,10);
+                const groups: Record<string, Entry[]> = {};
+                recent.forEach(e=>{ const k = e.project || "ไม่ระบุโครงการ"; if(!groups[k]) groups[k]=[]; groups[k].push(e); });
+                // sort groups by most recent entry date desc
+                const groupKeys = Object.keys(groups).sort((a,b)=>String(groups[b][0].date).localeCompare(String(groups[a][0].date)));
+                return groupKeys.map((projName,gIdx)=>{
+                  const list = groups[projName];
+                  const gIncome = list.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
+                  const gExpense = list.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+                  const gNet = gIncome - gExpense;
+                  return (
+                    <div key={projName} style={{ marginTop:gIdx===0?0:18 }}>
+                      <div style={{ background:"linear-gradient(90deg,#eff3fb,transparent)",borderLeft:"4px solid #1565c0",padding:"10px 12px",borderRadius:"8px 8px 0 0",marginBottom:4 }}>
+                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8 }}>
+                          <span style={{ fontWeight:800,fontSize:15,color:"#1a1a2e" }}>📁 {projName}</span>
+                          <span style={{ fontSize:11,color:"#888",fontWeight:600 }}>{list.length} รายการ</span>
+                        </div>
+                        <div style={{ display:"flex",gap:10,marginTop:4,fontSize:12,flexWrap:"wrap" }}>
+                          <span style={{ color:"#2e7d32",fontWeight:700 }}>↑ ฿{fmt(gIncome)}</span>
+                          <span style={{ color:"#c62828",fontWeight:700 }}>↓ ฿{fmt(gExpense)}</span>
+                          <span style={{ color:gNet>=0?"#1565c0":"#c62828",fontWeight:800,marginLeft:"auto" }}>สุทธิ {gNet>=0?"+":""}฿{fmt(gNet)}</span>
+                        </div>
+                      </div>
+                      {list.map((e,i)=>(
+                        <div key={e.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderBottom:i<list.length-1?"1px solid #f5f5f5":"none" }}>
+                          <div style={{ width:34,height:34,borderRadius:10,background:e.type==="income"?"#e8f5e9":"#ffebee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0 }}>{e.type==="income"?"↑":"↓"}</div>
+                          <div style={{ flex:1,minWidth:0 }}>
+                            <div style={{ fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.description}</div>
+                            <div style={{ fontSize:11,color:"#bbb",marginTop:2 }}>{e.category} · {fmtDate(String(e.date).slice(0,10))}</div>
+                          </div>
+                          <div style={{ textAlign:"right",flexShrink:0 }}>
+                            <div style={{ fontWeight:800,fontSize:14,color:e.type==="income"?"#2e7d32":"#c62828" }}>{e.type==="income"?"+":"-"}฿{fmt(e.amount)}</div>
+                            {(e.vat||e.wht)?<div style={{ fontSize:10,color:"#aaa" }}>{e.vat?`VAT ฿${fmt(e.vat)} `:""}{e.wht?`หัก ฿${fmt(e.wht)}`:""}</div>:null}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                    {(e.vat||e.wht)?<div style={{ fontSize:10,color:"#aaa" }}>
-                      {e.vat?`VAT ฿${fmt(e.vat)} `:""}{e.wht?`หัก ณ ฿${fmt(e.wht)}`:""}
-                    </div>:null}
-                  </div>
-                </div>
-              ))}
+                  );
+                });
+              })()}
             </div>
           </div>
         )}
@@ -457,6 +475,10 @@ export default function App() {
         {/* LIST */}
         {view==="list"&&(
           <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+              <button className="btn btn-green" onClick={()=>openAdd("income")} style={{ padding:14,fontSize:14 }}>💰 + เพิ่มรายรับ</button>
+              <button className="btn btn-red" onClick={()=>openAdd("expense")} style={{ padding:14,fontSize:14 }}>💸 + เพิ่มรายจ่าย</button>
+            </div>
             <div className="card" style={{ padding:"14px 16px" }}>
               <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
                 <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{ flex:1,minWidth:120,fontSize:14 }}>
@@ -521,34 +543,94 @@ export default function App() {
           </div>
         )}
 
-        {/* INSTALLMENTS */}
+        {/* PROJECT VIEW (with P&L + installments) */}
         {view==="installments"&&(()=>{
-          const tabList = installments.filter(i=>i.kind===instTab).sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+          const proj = selectedProject && projects.includes(selectedProject) ? selectedProject : (projects[0] || "");
+          if (!proj) return (
+            <div className="card" style={{ padding:24,textAlign:"center" }}>
+              <div style={{ fontSize:14,color:"#999",marginBottom:14 }}>ยังไม่มีโครงการ</div>
+              <button className="btn btn-green" onClick={()=>setShowProjMgr(true)} style={{ padding:"10px 18px" }}>+ เพิ่มโครงการ</button>
+            </div>
+          );
+          const projEntries = entries.filter(e=>e.project===proj).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+          const pIncome = projEntries.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
+          const pExpense = projEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+          const pNet = pIncome - pExpense;
+          const margin = pIncome>0 ? (pNet/pIncome)*100 : 0;
+          const projInst = installments.filter(i=>i.project===proj);
+          const tabList = projInst.filter(i=>i.kind===instTab).sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
           const tabPending = tabList.filter(i=>i.status==="pending");
           const tabDone = tabList.filter(i=>i.status!=="pending");
           const tabPendingTotal = tabPending.reduce((s,i)=>s+i.amount,0);
           const tabDoneTotal = tabDone.reduce((s,i)=>s+i.amount,0);
+          const recvPending = projInst.filter(i=>i.kind==="receivable"&&i.status==="pending").reduce((s,i)=>s+i.amount,0);
+          const payPending = projInst.filter(i=>i.kind==="payable"&&i.status==="pending").reduce((s,i)=>s+i.amount,0);
+          const projectedNet = pNet + recvPending - payPending;
           const isRecv = instTab==="receivable";
           const accent = isRecv ? "#2e7d32" : "#c62828";
           const accentBg = isRecv ? "#e8f5e9" : "#ffebee";
           return (
             <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-              {/* Tabs */}
-              <div style={{ display:"flex",background:"#fff",borderRadius:12,padding:4,boxShadow:"0 1px 4px rgba(0,0,0,.06)" }}>
+              {/* Project selector */}
+              <div className="card" style={{ padding:14 }}>
+                <label style={{ fontSize:11,color:"#aaa",fontWeight:700,display:"block",marginBottom:6,letterSpacing:".06em" }}>โครงการที่ต้องการดู</label>
+                <select value={proj} onChange={e=>setSelectedProject(e.target.value)} style={{ fontSize:15,fontWeight:700 }}>
+                  {projects.map(p=><option key={p} value={p}>{p}</option>)}
+                </select>
+              </div>
+
+              {/* P&L summary card */}
+              <div className="card" style={{ padding:0,overflow:"hidden" }}>
+                <div style={{ padding:"12px 16px",background:"#f8f9ff",borderBottom:"1px solid #eef0f8",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                  <div className="stitle" style={{ margin:0 }}>กำไรขาดทุน (P&amp;L)</div>
+                  <div style={{ fontSize:11,color:"#aaa" }}>{projEntries.length} รายการ</div>
+                </div>
+                <div style={{ padding:"4px 16px" }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
+                    <span style={{ fontSize:14,color:"#666" }}>รายรับรวม</span>
+                    <span style={{ fontSize:15,fontWeight:700,color:"#2e7d32" }}>+฿{fmt(pIncome)}</span>
+                  </div>
+                  <div style={{ display:"flex",justifyContent:"space-between",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
+                    <span style={{ fontSize:14,color:"#666" }}>รายจ่ายรวม</span>
+                    <span style={{ fontSize:15,fontWeight:700,color:"#c62828" }}>-฿{fmt(pExpense)}</span>
+                  </div>
+                  <div style={{ display:"flex",justifyContent:"space-between",padding:"14px 0",borderTop:"2px solid #e0e0e0",marginTop:2,background:pNet>=0?"linear-gradient(90deg,#e8f5e9,transparent)":"linear-gradient(90deg,#ffebee,transparent)",margin:"0 -16px",paddingLeft:16,paddingRight:16 }}>
+                    <span style={{ fontSize:15,fontWeight:800 }}>{pNet>=0?"📈 กำไรสุทธิ":"📉 ขาดทุนสุทธิ"}</span>
+                    <span style={{ fontSize:18,fontWeight:800,color:pNet>=0?"#2e7d32":"#c62828" }}>{pNet>=0?"+":"-"}฿{fmt(Math.abs(pNet))}</span>
+                  </div>
+                  <div style={{ padding:"10px 0",fontSize:12,color:"#888",textAlign:"right" }}>
+                    Margin: <b style={{ color:margin>=0?"#2e7d32":"#c62828" }}>{margin.toFixed(2)}%</b>
+                  </div>
+                </div>
+              </div>
+
+              {/* Projected with installments */}
+              {(recvPending>0||payPending>0)&&(
+                <div className="card" style={{ padding:14,background:"#fffde7",border:"1.5px solid #fff59d" }}>
+                  <div style={{ fontSize:11,fontWeight:700,color:"#827717",marginBottom:6 }}>📊 ประมาณการ (รวมงวดค้าง)</div>
+                  <div style={{ display:"flex",justifyContent:"space-between",fontSize:13 }}>
+                    <span style={{ color:"#666" }}>กำไรสุทธิ + งวดเบิกค้าง - งวดจ่ายค้าง</span>
+                    <span style={{ fontWeight:800,color:projectedNet>=0?"#2e7d32":"#c62828" }}>{projectedNet>=0?"+":"-"}฿{fmt(Math.abs(projectedNet))}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Installment tabs */}
+              <div style={{ display:"flex",background:"#fff",borderRadius:12,padding:4,boxShadow:"0 1px 4px rgba(0,0,0,.06)",marginTop:4 }}>
                 {([
-                  {k:"receivable" as InstKind, l:"💰 งวดเบิก (ลูกค้า)", c:"#2e7d32"},
-                  {k:"payable" as InstKind,    l:"💸 งวดจ่าย (ผู้รับเหมา)", c:"#c62828"}
+                  {k:"receivable" as InstKind, l:"💰 งวดเบิก", c:"#2e7d32"},
+                  {k:"payable" as InstKind,    l:"💸 งวดจ่าย", c:"#c62828"}
                 ]).map(t=>{
-                  const count = installments.filter(i=>i.kind===t.k&&i.status==="pending").length;
+                  const count = projInst.filter(i=>i.kind===t.k&&i.status==="pending").length;
                   return (
-                    <button key={t.k} onClick={()=>setInstTab(t.k)} style={{ flex:1,padding:"10px 8px",border:"none",borderRadius:8,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,background:instTab===t.k?t.c:"transparent",color:instTab===t.k?"#fff":"#888",position:"relative" }}>
+                    <button key={t.k} onClick={()=>setInstTab(t.k)} style={{ flex:1,padding:"10px 8px",border:"none",borderRadius:8,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,background:instTab===t.k?t.c:"transparent",color:instTab===t.k?"#fff":"#888" }}>
                       {t.l}{count>0&&<span style={{ marginLeft:6,background:instTab===t.k?"rgba(255,255,255,.25)":"#f0f0f0",padding:"1px 7px",borderRadius:10,fontSize:11 }}>{count}</span>}
                     </button>
                   );
                 })}
               </div>
 
-              {/* Summary */}
+              {/* Tab summary */}
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
                 <div className="card" style={{ padding:14,background:accentBg,border:"none" }}>
                   <div style={{ fontSize:11,color:"#777",marginBottom:3 }}>⏳ {instPendingLabel(instTab)}รวม</div>
@@ -562,11 +644,11 @@ export default function App() {
                 </div>
               </div>
 
-              <button className="btn" style={{ width:"100%",padding:14,fontSize:15,background:accent,color:"#fff" }} onClick={()=>{ setInstForm({kind:instTab,project:projects[0]||"",name:`${instLabel(instTab)}ที่ 1`,amount:"",dueDate:""}); setShowInstForm(true); }}>
-                + เพิ่ม{instLabel(instTab)}
+              <button className="btn" style={{ width:"100%",padding:14,fontSize:15,background:accent,color:"#fff" }} onClick={()=>{ setInstForm({kind:instTab,project:proj,name:`${instLabel(instTab)}ที่ ${tabList.length+1}`,amount:"",dueDate:""}); setShowInstForm(true); }}>
+                + เพิ่ม{instLabel(instTab)}สำหรับโครงการนี้
               </button>
 
-              {tabList.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"48px 0",fontSize:14 }}>ยังไม่มี{instLabel(instTab)}</div>
+              {tabList.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"48px 0",fontSize:14 }}>ยังไม่มี{instLabel(instTab)}สำหรับโครงการนี้</div>
               :tabList.map(inst=>{
                 const days=daysUntil(inst.dueDate);
                 const isUrgent=days<=7&&days>=0&&inst.status==="pending";
@@ -580,7 +662,6 @@ export default function App() {
                         {done?`✅ ${instDoneLabel(inst.kind)}`:`⏳ ${instPendingLabel(inst.kind)}`}
                       </span>
                     </div>
-                    <div style={{ fontSize:13,color:"#666",marginBottom:4 }}>📁 {inst.project}</div>
                     <div style={{ fontSize:18,fontWeight:800,color:accent,marginBottom:4 }}>
                       {inst.kind==="payable"?"-":"+"}฿{fmt(inst.amount)}
                     </div>
@@ -602,223 +683,11 @@ export default function App() {
           );
         })()}
 
-        {/* PROJECTS */}
-        {view==="projects"&&(
-          <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-            <div className="card" style={{ padding:16 }}>
-              <div style={{ display:"flex",gap:8 }}>
-                <input placeholder="ชื่อโครงการใหม่..." value={newProj} onChange={e=>setNewProj(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addProject()} style={{ flex:1 }}/>
-                <button className="btn btn-green" onClick={addProject} disabled={saving} style={{ whiteSpace:"nowrap",padding:"12px 16px" }}>+ เพิ่ม</button>
-              </div>
-            </div>
-            {projectStats.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"40px 0",fontSize:14 }}>ยังไม่มีข้อมูลโครงการ</div>
-            :projectStats.map(p=>{
-              const maxVal=Math.max(...projectStats.map(x=>x.income+x.expense),1);
-              const projRecv=installments.filter(i=>i.project===p.name&&i.kind==="receivable"&&i.status==="pending");
-              const projPay=installments.filter(i=>i.project===p.name&&i.kind==="payable"&&i.status==="pending");
-              return (
-                <div key={p.name} className="card" style={{ padding:16 }}>
-                  <div onClick={()=>{ setSelectedProject(p.name); setView("project-detail"); }} style={{ cursor:"pointer" }}>
-                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
-                      <span style={{ fontWeight:700,fontSize:14 }}>{p.name} <span style={{ color:"#1565c0",fontSize:12,marginLeft:4 }}>→</span></span>
-                      <span style={{ fontWeight:800,color:p.net>=0?"#2e7d32":"#c62828",fontSize:14 }}>฿{fmt(p.net)}</span>
-                    </div>
-                    <div style={{ display:"flex",gap:12,fontSize:12,color:"#bbb",marginBottom:(projRecv.length||projPay.length)?8:10 }}>
-                      <span style={{ color:"#2e7d32" }}>รับ ฿{fmt(p.income)}</span>
-                      <span style={{ color:"#c62828" }}>จ่าย ฿{fmt(p.expense)}</span>
-                    </div>
-                    {projRecv.length>0&&(
-                      <div style={{ fontSize:12,color:"#2e7d32",marginBottom:4 }}>⏳ งวดเบิกรอรับ {projRecv.length} งวด รวม ฿{fmt(projRecv.reduce((s,i)=>s+i.amount,0))}</div>
-                    )}
-                    {projPay.length>0&&(
-                      <div style={{ fontSize:12,color:"#c62828",marginBottom:8 }}>⏳ งวดจ่ายค้างจ่าย {projPay.length} งวด รวม ฿{fmt(projPay.reduce((s,i)=>s+i.amount,0))}</div>
-                    )}
-                    <div style={{ background:"#f0f0f0",borderRadius:6,height:8,overflow:"hidden",marginBottom:10 }}>
-                      <div style={{ width:`${((p.income+p.expense)/maxVal)*100}%`,height:"100%",background:p.net>=0?"linear-gradient(90deg,#2e7d32,#66bb6a)":"linear-gradient(90deg,#c62828,#ef5350)",borderRadius:6 }}/>
-                    </div>
-                  </div>
-                  <div style={{ display:"flex",gap:8 }}>
-                    <button className="btn btn-outline" onClick={()=>{ setSelectedProject(p.name); setView("project-detail"); }} style={{ flex:1,fontSize:12,padding:"6px 12px" }}>📊 ดู P&amp;L</button>
-                    <button className="btn btn-red" onClick={()=>removeProject(p.name)} style={{ fontSize:12,padding:"6px 12px" }}>ลบ</button>
-                  </div>
-                </div>
-              );
-            })}
-            {projects.filter(p=>!projectStats.find(s=>s.name===p)).map(p=>(
-              <div key={p} className="card" style={{ padding:"14px 16px",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
-                <span style={{ fontSize:14,color:"#999",cursor:"pointer",flex:1 }} onClick={()=>{ setSelectedProject(p); setView("project-detail"); }}>{p} →</span>
-                <button className="btn btn-red" onClick={()=>removeProject(p)} style={{ fontSize:12,padding:"6px 12px" }}>ลบ</button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* PROJECT DETAIL — P&L per project */}
-        {view==="project-detail"&&selectedProject&&(()=>{
-          const proj: string = selectedProject;
-          const projEntries = entries.filter(e=>e.project===proj).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-          const pIncome = projEntries.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
-          const pExpense = projEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
-          const pNet = pIncome - pExpense;
-          const pVat = projEntries.reduce((s,e)=>s+(e.vat||0),0);
-          const pWht = projEntries.reduce((s,e)=>s+(e.wht||0),0);
-          const margin = pIncome>0 ? (pNet/pIncome)*100 : 0;
-          const recvInst = installments.filter(i=>i.project===proj&&i.kind==="receivable").sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
-          const payInst = installments.filter(i=>i.project===proj&&i.kind==="payable").sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
-          const recvPending = recvInst.filter(i=>i.status==="pending").reduce((s,i)=>s+i.amount,0);
-          const payPending = payInst.filter(i=>i.status==="pending").reduce((s,i)=>s+i.amount,0);
-          const projectedNet = pNet + recvPending - payPending;
-          // Category breakdown
-          const catBreakdown: Record<string,{income:number,expense:number}> = {};
-          projEntries.forEach(e=>{ if(!catBreakdown[e.category]) catBreakdown[e.category]={income:0,expense:0}; catBreakdown[e.category][e.type as "income"|"expense"]+=e.amount; });
-          const cats = Object.entries(catBreakdown).sort(([,a],[,b])=>(b.income+b.expense)-(a.income+a.expense));
-
-          return (
-            <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-              {/* Back & title */}
-              <div className="card" style={{ padding:16 }}>
-                <button className="btn btn-ghost" style={{ fontSize:12,padding:"6px 12px",marginBottom:10 }} onClick={()=>{ setSelectedProject(null); setView("projects"); }}>← กลับ</button>
-                <div style={{ fontSize:11,color:"#bbb",fontWeight:700,letterSpacing:".08em" }}>P&amp;L STATEMENT</div>
-                <div style={{ fontWeight:800,fontSize:20,marginTop:2 }}>📁 {proj}</div>
-                <div style={{ fontSize:12,color:"#aaa",marginTop:4 }}>{projEntries.length} รายการ</div>
-              </div>
-
-              {/* P&L summary */}
-              <div className="card" style={{ padding:0,overflow:"hidden" }}>
-                <div style={{ padding:"14px 16px",background:"#f8f9ff",borderBottom:"1px solid #eef0f8" }}>
-                  <div className="stitle" style={{ margin:0 }}>กำไรขาดทุน (P&amp;L)</div>
-                </div>
-                <div style={{ padding:"4px 16px" }}>
-                  <div style={{ display:"flex",justifyContent:"space-between",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
-                    <span style={{ fontSize:14,color:"#666" }}>รายรับรวม</span>
-                    <span style={{ fontSize:15,fontWeight:700,color:"#2e7d32" }}>+฿{fmt(pIncome)}</span>
-                  </div>
-                  <div style={{ display:"flex",justifyContent:"space-between",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
-                    <span style={{ fontSize:14,color:"#666" }}>รายจ่ายรวม</span>
-                    <span style={{ fontSize:15,fontWeight:700,color:"#c62828" }}>-฿{fmt(pExpense)}</span>
-                  </div>
-                  <div style={{ display:"flex",justifyContent:"space-between",padding:"14px 0",borderTop:"2px solid #e0e0e0",marginTop:2,background:pNet>=0?"linear-gradient(90deg,#e8f5e9,transparent)":"linear-gradient(90deg,#ffebee,transparent)",margin:"0 -16px",paddingLeft:16,paddingRight:16 }}>
-                    <span style={{ fontSize:15,fontWeight:800 }}>{pNet>=0?"📈 กำไรสุทธิ":"📉 ขาดทุนสุทธิ"}</span>
-                    <span style={{ fontSize:18,fontWeight:800,color:pNet>=0?"#2e7d32":"#c62828" }}>{pNet>=0?"+":"-"}฿{fmt(Math.abs(pNet))}</span>
-                  </div>
-                  <div style={{ padding:"10px 0",fontSize:12,color:"#888",textAlign:"right" }}>
-                    Margin: <b style={{ color:margin>=0?"#2e7d32":"#c62828" }}>{margin.toFixed(2)}%</b>
-                    {(pVat||pWht)?<span style={{ marginLeft:10 }}>· VAT ฿{fmt(pVat)} · หัก ฿{fmt(pWht)}</span>:null}
-                  </div>
-                </div>
-              </div>
-
-              {/* Donut */}
-              <div className="card" style={{ padding:20 }}>
-                <div className="stitle">สัดส่วน</div>
-                <Donut income={pIncome} expense={pExpense}/>
-              </div>
-
-              {/* Projected (incl. pending installments) */}
-              {(recvPending>0||payPending>0)&&(
-                <div className="card" style={{ padding:16,background:"#fffde7",border:"1.5px solid #fff59d" }}>
-                  <div style={{ fontSize:12,fontWeight:700,color:"#827717",marginBottom:8 }}>📊 ประมาณการ (รวมงวดที่ยังไม่ดำเนินการ)</div>
-                  {recvPending>0&&<div style={{ display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4 }}><span style={{ color:"#666" }}>+ งวดเบิกค้างรับ</span><span style={{ fontWeight:700,color:"#2e7d32" }}>+฿{fmt(recvPending)}</span></div>}
-                  {payPending>0&&<div style={{ display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4 }}><span style={{ color:"#666" }}>- งวดจ่ายค้างจ่าย</span><span style={{ fontWeight:700,color:"#c62828" }}>-฿{fmt(payPending)}</span></div>}
-                  <div style={{ display:"flex",justifyContent:"space-between",fontSize:14,paddingTop:8,marginTop:6,borderTop:"1px dashed #d4af00" }}>
-                    <span style={{ fontWeight:700 }}>กำไรสุทธิคาดการณ์</span>
-                    <span style={{ fontWeight:800,color:projectedNet>=0?"#2e7d32":"#c62828" }}>{projectedNet>=0?"+":"-"}฿{fmt(Math.abs(projectedNet))}</span>
-                  </div>
-                </div>
-              )}
-
-              {/* Receivables for this project */}
-              <div className="card" style={{ padding:16 }}>
-                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
-                  <div className="stitle" style={{ margin:0,color:"#2e7d32" }}>💰 งวดเบิก ({recvInst.length})</div>
-                  <button className="btn btn-ghost" style={{ fontSize:12,padding:"6px 10px" }} onClick={()=>{ setInstForm({kind:"receivable",project:proj,name:`งวดเบิกที่ ${recvInst.length+1}`,amount:"",dueDate:""}); setShowInstForm(true); }}>+ เพิ่ม</button>
-                </div>
-                {recvInst.length===0?<div style={{ fontSize:13,color:"#ccc",textAlign:"center",padding:"12px 0" }}>ยังไม่มีงวดเบิก</div>
-                :recvInst.map(i=>{
-                  const days=daysUntil(i.dueDate);
-                  const done=i.status!=="pending";
-                  return (
-                    <div key={i.id} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid #f5f5f5" }}>
-                      <div style={{ flex:1,minWidth:0 }}>
-                        <div style={{ fontSize:13,fontWeight:600 }}>{i.name}</div>
-                        <div style={{ fontSize:11,color:done?"#2e7d32":days<0?"#c62828":"#888" }}>{fmtDate(i.dueDate)}{!done&&` · อีก ${days} วัน`}</div>
-                      </div>
-                      <div style={{ textAlign:"right" }}>
-                        <div style={{ fontSize:14,fontWeight:700,color:"#2e7d32" }}>+฿{fmt(i.amount)}</div>
-                        <span className={`badge badge-${done?"received":"pending"}`} style={{ fontSize:10,padding:"2px 8px" }}>{done?"✅ รับแล้ว":"⏳ รอรับ"}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Payables for this project */}
-              <div className="card" style={{ padding:16 }}>
-                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
-                  <div className="stitle" style={{ margin:0,color:"#c62828" }}>💸 งวดจ่าย ({payInst.length})</div>
-                  <button className="btn btn-ghost" style={{ fontSize:12,padding:"6px 10px" }} onClick={()=>{ setInstForm({kind:"payable",project:proj,name:`งวดจ่ายที่ ${payInst.length+1}`,amount:"",dueDate:""}); setShowInstForm(true); }}>+ เพิ่ม</button>
-                </div>
-                {payInst.length===0?<div style={{ fontSize:13,color:"#ccc",textAlign:"center",padding:"12px 0" }}>ยังไม่มีงวดจ่าย</div>
-                :payInst.map(i=>{
-                  const days=daysUntil(i.dueDate);
-                  const done=i.status!=="pending";
-                  return (
-                    <div key={i.id} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 0",borderBottom:"1px solid #f5f5f5" }}>
-                      <div style={{ flex:1,minWidth:0 }}>
-                        <div style={{ fontSize:13,fontWeight:600 }}>{i.name}</div>
-                        <div style={{ fontSize:11,color:done?"#2e7d32":days<0?"#c62828":"#888" }}>{fmtDate(i.dueDate)}{!done&&` · อีก ${days} วัน`}</div>
-                      </div>
-                      <div style={{ textAlign:"right" }}>
-                        <div style={{ fontSize:14,fontWeight:700,color:"#c62828" }}>-฿{fmt(i.amount)}</div>
-                        <span className={`badge badge-${done?"received":"pending"}`} style={{ fontSize:10,padding:"2px 8px" }}>{done?"✅ จ่ายแล้ว":"⏳ รอจ่าย"}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Category breakdown */}
-              {cats.length>0&&(
-                <div className="card" style={{ padding:16 }}>
-                  <div className="stitle">แยกตามหมวดหมู่</div>
-                  {cats.map(([cat,v])=>(
-                    <div key={cat} style={{ padding:"10px 0",borderBottom:"1px solid #f5f5f5" }}>
-                      <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
-                        <span style={{ fontSize:13,fontWeight:600 }}>{cat}</span>
-                        <span style={{ fontSize:13,fontWeight:700,color:v.income>v.expense?"#2e7d32":"#c62828" }}>
-                          {v.income>0?`+฿${fmt(v.income)}`:""}{v.income>0&&v.expense>0?" / ":""}{v.expense>0?`-฿${fmt(v.expense)}`:""}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* All entries */}
-              <div className="card" style={{ padding:16 }}>
-                <div className="stitle">รายการทั้งหมดของโครงการ</div>
-                {projEntries.length===0?<div style={{ fontSize:13,color:"#ccc",textAlign:"center",padding:"16px 0" }}>ยังไม่มีรายการ</div>
-                :projEntries.map((e,i,arr)=>(
-                  <div key={e.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:i<arr.length-1?"1px solid #f5f5f5":"none" }}>
-                    <div style={{ width:32,height:32,borderRadius:10,background:e.type==="income"?"#e8f5e9":"#ffebee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0 }}>{e.type==="income"?"↑":"↓"}</div>
-                    <div style={{ flex:1,minWidth:0 }}>
-                      <div style={{ fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.description}</div>
-                      <div style={{ fontSize:11,color:"#bbb" }}>{e.category} · {fmtDate(String(e.date).slice(0,10))}</div>
-                    </div>
-                    <div style={{ textAlign:"right",flexShrink:0 }}>
-                      <div style={{ fontWeight:700,fontSize:13,color:e.type==="income"?"#2e7d32":"#c62828" }}>{e.type==="income"?"+":"-"}฿{fmt(e.amount)}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })()}
       </div>
 
       {/* BOTTOM NAV */}
       <div className="bottom-nav">
-        {[{k:"dashboard",icon:"📊",l:"ภาพรวม"},{k:"list",icon:"📋",l:"รายการ"},{k:"installments",icon:"📆",l:"งวดงาน"},{k:"projects",icon:"🏢",l:"โครงการ"}].map(n=>(
+        {[{k:"dashboard",icon:"📊",l:"ภาพรวม"},{k:"list",icon:"📋",l:"รายการ"},{k:"installments",icon:"📁",l:"โครงการ"}].map(n=>(
           <button key={n.k} className={`bnav-btn${view===n.k?" active":""}`} onClick={()=>setView(n.k)}>
             <span>{n.icon}</span>{n.l}
             {n.k==="installments"&&urgentInst.length>0&&<div style={{ position:"absolute",top:6,background:"#c62828",color:"#fff",borderRadius:50,width:16,height:16,fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700 }}>{urgentInst.length}</div>}
@@ -827,7 +696,7 @@ export default function App() {
         <button className="bnav-btn" onClick={()=>setShowProjMgr(true)}><span>⚙️</span>ตั้งค่า</button>
       </div>
 
-      <button className="fab" onClick={openAdd}>+</button>
+      <button className="fab" onClick={()=>openAdd()}>+</button>
 
       {/* ENTRY FORM */}
       {showForm&&(
@@ -937,6 +806,62 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* NOTIFICATION POPUP */}
+      {showNotifPopup&&(()=>{
+        const upcoming = installments
+          .filter(i=>i.status==="pending")
+          .map(i=>({ ...i, days: daysUntil(i.dueDate) }))
+          .filter(i=>i.days<=14)
+          .sort((a,b)=>a.days-b.days);
+        const overdue = upcoming.filter(i=>i.days<0);
+        const urgent  = upcoming.filter(i=>i.days>=0&&i.days<=7);
+        const soon    = upcoming.filter(i=>i.days>7&&i.days<=14);
+        const section = (title: string, items: typeof upcoming, color: string, bg: string) => items.length>0&&(
+          <div style={{ marginBottom:14 }}>
+            <div style={{ fontSize:12,fontWeight:700,color,marginBottom:8,letterSpacing:".04em" }}>{title} ({items.length})</div>
+            {items.map(i=>(
+              <div key={i.id} style={{ background:bg,borderRadius:10,padding:"10px 12px",marginBottom:6,borderLeft:`3px solid ${color}` }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8 }}>
+                  <div style={{ fontWeight:700,fontSize:14 }}>
+                    <span style={{ fontSize:11,fontWeight:700,color:i.kind==="payable"?"#c62828":"#2e7d32",marginRight:6 }}>[{instLabel(i.kind)}]</span>
+                    {i.name}
+                  </div>
+                  <div style={{ fontWeight:800,fontSize:14,color:i.kind==="payable"?"#c62828":"#2e7d32",whiteSpace:"nowrap" }}>{i.kind==="payable"?"-":"+"}฿{fmt(i.amount)}</div>
+                </div>
+                <div style={{ fontSize:11,color:"#666",marginTop:3 }}>📁 {i.project} · 📅 {fmtDate(i.dueDate)} · {i.days<0?`เลยกำหนด ${Math.abs(i.days)} วัน`:`อีก ${i.days} วัน`}</div>
+              </div>
+            ))}
+          </div>
+        );
+        return (
+          <div className="modal-bg" onClick={()=>setShowNotifPopup(false)}>
+            <div className="modal" onClick={e=>e.stopPropagation()}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18 }}>
+                <div style={{ fontWeight:800,fontSize:18 }}>🔔 งวดที่ใกล้ครบกำหนด</div>
+                <button onClick={()=>setShowNotifPopup(false)} aria-label="ปิด" style={{ width:32,height:32,borderRadius:"50%",border:"none",background:"#f0f0f0",fontSize:18,fontWeight:700,cursor:"pointer",color:"#666" }}>✕</button>
+              </div>
+              {upcoming.length===0?(
+                <div style={{ textAlign:"center",color:"#aaa",padding:"32px 8px",fontSize:14 }}>
+                  <div style={{ fontSize:38,marginBottom:10 }}>✨</div>
+                  ไม่มีงวดที่ใกล้ครบกำหนดใน 14 วัน
+                </div>
+              ):(
+                <div>
+                  {section("⚠️ เลยกำหนดแล้ว", overdue, "#c62828", "#ffebee")}
+                  {section("🚨 ภายใน 7 วัน", urgent, "#e65100", "#fff3e0")}
+                  {section("📌 8-14 วันข้างหน้า", soon, "#1565c0", "#e8eaf6")}
+                </div>
+              )}
+              {!notifGranted&&(
+                <button className="btn btn-orange" style={{ marginTop:8,width:"100%",padding:12 }} onClick={()=>{ setShowNotifPopup(false); requestNotifPermission(); }}>
+                  🔔 เปิด Push Notification ของระบบ
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* TAX SUMMARY MODAL */}
       {showTaxSummary&&(
