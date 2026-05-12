@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, type ReactNode } from "react";
 
 const API = "https://script.google.com/macros/s/AKfycbzCUVLVzXjRWSQri8XTjOrFh373mp_dU3PkCTODGPhyX1bsYNMWf1CxhS79ntUDer5IwA/exec";
 
@@ -84,14 +84,19 @@ function buildDocHTML(opts: {
   customerName: string;
   itemName: string;
   amount: number;
+  hasVat?: boolean;
+  hasWht?: boolean;
+  whtRate?: number;
 }): string {
   const isInv = opts.kind === "invoice";
   const titleEn = isInv ? "Invoice" : "TAX INVOICE/RECEIPT";
   const titleTh = isInv ? "ใบแจ้งหนี้" : "ใบกำกับภาษี/ใบเสร็จรับเงิน";
-  const vat = opts.amount * 0.07;
-  const wht = isInv ? 0 : opts.amount * 0.03;
-  const total = opts.amount + vat;
-  const grandTotal = total - wht;
+  const hasVat = !!opts.hasVat;
+  const hasWht = !isInv && !!opts.hasWht;
+  const whtRate = (opts.whtRate ?? 3) / 100;
+  const vat = hasVat ? opts.amount * 0.07 : 0;
+  const wht = hasWht ? opts.amount * whtRate : 0;
+  const grandTotal = opts.amount + vat - wht;
   const signerLeftRole = isInv ? "ผู้อนุมัติ" : "ผู้รับเงิน";
   const signerLeftName = isInv ? `(${COMPANY.approver}) ตัวแทนขาย` : `(คุณ${COMPANY.approver.replace(/^นาย/,"")}) ตัวแทนขาย`;
   const signerRightRole = isInv ? "ผู้รับใบแจ้งหนี้" : "ผู้จ่ายเงิน";
@@ -169,8 +174,8 @@ function buildDocHTML(opts: {
     </div>
     <div style="width:240px;">
       <div style="display:flex;justify-content:space-between;padding:4px 0;"><span>ราคารวม</span><span>${fmt(opts.amount)}</span></div>
-      <div style="display:flex;justify-content:space-between;padding:4px 0;"><span>VAT 7%</span><span>${fmt(vat)}</span></div>
-      ${!isInv?`<div style="display:flex;justify-content:space-between;padding:4px 0;color:#c62828;"><span>หัก ณ ที่จ่าย 3%</span><span>-${fmt(wht)}</span></div>`:""}
+      ${hasVat?`<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>VAT 7%</span><span>${fmt(vat)}</span></div>`:""}
+      ${hasWht?`<div style="display:flex;justify-content:space-between;padding:4px 0;color:#c62828;"><span>หัก ณ ที่จ่าย ${(whtRate*100).toFixed(whtRate*100%1===0?0:1)}%</span><span>-${fmt(wht)}</span></div>`:""}
       <div style="display:flex;justify-content:space-between;padding:8px 0;border-top:2px solid #111;font-weight:800;font-size:13px;">
         <span>เงินรวมทั้งสิ้น</span><span>${fmt(grandTotal)}</span>
       </div>
@@ -217,6 +222,9 @@ async function generateDocPDF(kind: "invoice"|"receipt", opts: {
   customerName: string;
   itemName: string;
   amount: number;
+  hasVat?: boolean;
+  hasWht?: boolean;
+  whtRate?: number;
 }) {
   const [{ default: html2canvas }, jsPDFmod] = await Promise.all([
     import("html2canvas"),
@@ -275,9 +283,12 @@ async function apiPost(action: string, body: object = {}) {
 interface Entry { id: number; date: string; type: string; category: string; project: string; description: string; amount: number; vat?: number; wht?: number; }
 type InstKind = "receivable"|"payable";
 type InstStatus = "pending"|"received"|"paid";
-interface Installment { id: number; kind: InstKind; project: string; name: string; amount: number; dueDate: string; status: InstStatus; invoiceNo?: string; receiptNo?: string; }
+interface ProjectTaxSettings { hasVat: boolean; hasWht: boolean; whtRate: number; }
+interface Installment { id: number; kind: InstKind; project: string; name: string; amount: number; dueDate: string; status: InstStatus; invoiceNo?: string; receiptNo?: string; hasVat?: boolean; hasWht?: boolean; whtRate?: number; }
 interface FormState { date: string; type: string; category: string; project: string; description: string; amount: string; useVat: boolean; useWht: boolean; }
 interface InstForm { kind: InstKind; project: string; name: string; amount: string; dueDate: string; }
+
+const defaultTaxSettings: ProjectTaxSettings = { hasVat: false, hasWht: false, whtRate: 3 };
 
 const instLabel = (kind: InstKind) => kind==="payable" ? "งวดจ่าย" : "งวดเบิก";
 const instDoneLabel = (kind: InstKind) => kind==="payable" ? "จ่ายแล้ว" : "รับแล้ว";
@@ -343,9 +354,30 @@ export default function App() {
   const [selectedProject, setSelectedProject] = useState<string|null>(null);
   const [showNotifPopup, setShowNotifPopup] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string,boolean>>({});
+  const [projectTax, setProjectTax] = useState<Record<string, ProjectTaxSettings>>({});
+  const [pendingTaxPropagate, setPendingTaxPropagate] = useState<{ name: string; next: ProjectTaxSettings }|null>(null);
 
   function toggleGroup(key: string) {
     setCollapsedGroups(s => ({ ...s, [key]: !s[key] }));
+  }
+
+  const getProjectTax = useCallback((name: string): ProjectTaxSettings => projectTax[name] || defaultTaxSettings, [projectTax]);
+
+  function saveProjectTax(map: Record<string, ProjectTaxSettings>) {
+    setProjectTax(map);
+    localStorage.setItem("wf_project_tax", JSON.stringify(map));
+  }
+
+  function updateProjectTaxField(name: string, partial: Partial<ProjectTaxSettings>) {
+    const next: ProjectTaxSettings = { ...getProjectTax(name), ...partial };
+    saveProjectTax({ ...projectTax, [name]: next });
+    if (installments.some(i => i.project === name)) {
+      setPendingTaxPropagate({ name, next });
+    }
+  }
+
+  function propagateTaxToInstallments(name: string, t: ProjectTaxSettings) {
+    saveInstallments(installments.map(i => i.project === name ? { ...i, hasVat: t.hasVat, hasWht: t.hasWht, whtRate: t.whtRate } : i));
   }
 
   const loadAll = useCallback(async () => {
@@ -360,6 +392,9 @@ export default function App() {
         const list: Installment[] = JSON.parse(saved).map((i: Installment & {kind?: InstKind}) => ({ ...i, kind: i.kind || "receivable" }));
         setInstallments(list);
       }
+      // load per-project tax settings
+      const taxSaved = localStorage.getItem("wf_project_tax");
+      if (taxSaved) setProjectTax(JSON.parse(taxSaved));
     } catch { setError("เชื่อมต่อไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ต"); }
     setLoading(false);
   }, []);
@@ -403,7 +438,8 @@ export default function App() {
 
   function addInstallment() {
     if (!instForm.project || !instForm.name || !instForm.amount || !instForm.dueDate) { showToast("กรอกข้อมูลให้ครบ", "err"); return; }
-    const newInst: Installment = { id: Date.now(), kind: instForm.kind, project: instForm.project, name: instForm.name, amount: +instForm.amount, dueDate: instForm.dueDate, status: "pending" };
+    const t = getProjectTax(instForm.project);
+    const newInst: Installment = { id: Date.now(), kind: instForm.kind, project: instForm.project, name: instForm.name, amount: +instForm.amount, dueDate: instForm.dueDate, status: "pending", hasVat: t.hasVat, hasWht: t.hasWht, whtRate: t.whtRate };
     saveInstallments([...installments, newInst]);
     setShowInstForm(false);
     setInstForm({ kind: instForm.kind, project: projects[0]||"", name:"งวดที่ 1", amount:"", dueDate:"" });
@@ -423,7 +459,7 @@ export default function App() {
     }
     showToast("กำลังสร้างใบวางบิล...");
     try {
-      await generateDocPDF("invoice", { docNo: invoiceNo, customerName: inst.project, itemName: inst.name, amount: inst.amount });
+      await generateDocPDF("invoice", { docNo: invoiceNo, customerName: inst.project, itemName: inst.name, amount: inst.amount, hasVat: inst.hasVat, hasWht: inst.hasWht, whtRate: inst.whtRate });
       showToast("สร้างใบวางบิลสำเร็จ");
     } catch (e) { console.error(e); showToast("สร้าง PDF ไม่สำเร็จ", "err"); }
   }
@@ -436,7 +472,7 @@ export default function App() {
     }
     showToast("กำลังสร้างใบเสร็จ...");
     try {
-      await generateDocPDF("receipt", { docNo: receiptNo, customerName: inst.project, itemName: inst.name, amount: inst.amount });
+      await generateDocPDF("receipt", { docNo: receiptNo, customerName: inst.project, itemName: inst.name, amount: inst.amount, hasVat: inst.hasVat, hasWht: inst.hasWht, whtRate: inst.whtRate });
       showToast("สร้างใบเสร็จสำเร็จ");
     } catch (e) { console.error(e); showToast("สร้าง PDF ไม่สำเร็จ", "err"); }
   }
@@ -1056,6 +1092,37 @@ export default function App() {
                 })()}
               </div>
 
+              {/* Project tax settings */}
+              {(()=>{
+                const pt = getProjectTax(proj);
+                const checkboxRow = (checked: boolean, label: string, onClick: ()=>void, extra?: ReactNode) => (
+                  <div style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:checked?"#e8f5e9":"#f8f9ff",borderRadius:10,border:`1.5px solid ${checked?"#2e7d32":"#e0e4f0"}`,cursor:"pointer" }} onClick={onClick}>
+                    <div style={{ width:22,height:22,borderRadius:6,background:checked?"#2e7d32":"#fff",border:`2px solid ${checked?"#2e7d32":"#bbb"}`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:800,flexShrink:0 }}>
+                      {checked?"✓":""}
+                    </div>
+                    <div style={{ flex:1,fontSize:14,fontWeight:600,color:checked?"#1b5e20":"#333" }}>{label}</div>
+                    {extra}
+                  </div>
+                );
+                return (
+                  <div className="card" style={{ padding:14 }}>
+                    <div className="stitle" style={{ marginBottom:10 }}>⚙️ ภาษีของโครงการ</div>
+                    <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                      {checkboxRow(pt.hasVat, "VAT 7%", ()=>updateProjectTaxField(proj, { hasVat: !pt.hasVat }))}
+                      {checkboxRow(pt.hasWht, `หัก ณ ที่จ่าย ${pt.hasWht?pt.whtRate:""}${pt.hasWht?"%":""}`.trim(), ()=>updateProjectTaxField(proj, { hasWht: !pt.hasWht }),
+                        pt.hasWht ? (
+                          <div style={{ display:"flex",alignItems:"center",gap:4 }} onClick={e=>e.stopPropagation()}>
+                            <input type="number" min="0" max="50" step="0.5" value={pt.whtRate} onChange={e=>updateProjectTaxField(proj, { whtRate: +e.target.value })} style={{ width:64,padding:"6px 8px",fontSize:13,textAlign:"center" }}/>
+                            <span style={{ fontSize:13,fontWeight:600,color:"#1b5e20" }}>%</span>
+                          </div>
+                        ) : undefined
+                      )}
+                    </div>
+                    <div style={{ marginTop:8,fontSize:11,color:"#888" }}>ค่านี้จะถูก lock ลงในงวดใหม่ที่สร้างต่อไปอัตโนมัติ</div>
+                  </div>
+                );
+              })()}
+
               {/* P&L summary card */}
               <div className="card" style={{ padding:0,overflow:"hidden" }}>
                 <div style={{ padding:"12px 16px",background:"#f8f9ff",borderBottom:"1px solid #eef0f8",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
@@ -1142,6 +1209,12 @@ export default function App() {
                     <div style={{ fontSize:18,fontWeight:800,color:accent,marginBottom:4 }}>
                       {inst.kind==="payable"?"-":"+"}฿{fmt(inst.amount)}
                     </div>
+                    {(inst.hasVat||inst.hasWht)&&(
+                      <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:6 }}>
+                        {inst.hasVat&&<span style={{ fontSize:11,fontWeight:700,color:"#1b5e20",background:"#e8f5e9",padding:"3px 9px",borderRadius:6 }}>VAT 7% ✓</span>}
+                        {inst.hasWht&&<span style={{ fontSize:11,fontWeight:700,color:"#b71c1c",background:"#ffebee",padding:"3px 9px",borderRadius:6 }}>หัก {inst.whtRate??3}% ✓</span>}
+                      </div>
+                    )}
                     <div style={{ fontSize:13,color:isOverdue?"#c62828":isUrgent?"#e65100":"#888" }}>
                       📅 {fmtDate(inst.dueDate)}
                       {inst.status==="pending"&&(isOverdue?` — เลยกำหนด ${Math.abs(days)} วัน`:` — อีก ${days} วัน`)}
@@ -1474,6 +1547,32 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* TAX PROPAGATE CONFIRM */}
+      {pendingTaxPropagate&&(()=>{
+        const { name, next } = pendingTaxPropagate;
+        const affected = installments.filter(i=>i.project===name).length;
+        return (
+          <div className="modal-bg" onClick={()=>setPendingTaxPropagate(null)}>
+            <div className="modal" onClick={e=>e.stopPropagation()}>
+              <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+              <div style={{ fontSize:36,textAlign:"center",marginBottom:10 }}>🧾</div>
+              <div style={{ fontWeight:800,fontSize:17,textAlign:"center",marginBottom:8 }}>อัปเดตงวดที่มีอยู่แล้วด้วยไหม?</div>
+              <div style={{ color:"#666",textAlign:"center",marginBottom:14,fontSize:14 }}>
+                คุณเพิ่งเปลี่ยนภาษีของโครงการ <b>{name}</b> มีงวดเดิม <b>{affected}</b> งวด
+              </div>
+              <div style={{ background:"#f8f9ff",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13 }}>
+                <div>VAT 7%: <b style={{ color:next.hasVat?"#2e7d32":"#999" }}>{next.hasVat?"เปิด ✓":"ปิด"}</b></div>
+                <div>หัก ณ ที่จ่าย: <b style={{ color:next.hasWht?"#2e7d32":"#999" }}>{next.hasWht?`${next.whtRate}% ✓`:"ปิด"}</b></div>
+              </div>
+              <div style={{ display:"flex",gap:10 }}>
+                <button className="btn btn-ghost" onClick={()=>setPendingTaxPropagate(null)} style={{ flex:1,padding:13 }}>ไม่ — ใช้กับงวดใหม่เท่านั้น</button>
+                <button className="btn btn-primary" onClick={()=>{ propagateTaxToInstallments(name, next); setPendingTaxPropagate(null); showToast("อัปเดตภาษีของงวดเก่าแล้ว"); }} style={{ flex:1,padding:13 }}>ใช่ — อัปเดตทั้งหมด</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* DELETE CONFIRM */}
       {deleteId&&(
