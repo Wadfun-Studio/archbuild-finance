@@ -557,9 +557,6 @@ export default function App() {
                 </div>
               </div>
             ))}
-            <button className="btn btn-primary" onClick={()=>setView("installments")} style={{ width:"100%",padding:14,fontSize:14,marginTop:4 }}>
-              📑 ดู Statement ทั้งหมด (แยกตามโครงการ) →
-            </button>
           </div>
         )}
 
@@ -699,6 +696,48 @@ export default function App() {
                   </div>
                 );
               })}
+
+              {/* Statement section — collapsible per project */}
+              {(()=>{
+                const stmtKey = `stmt:${proj}`;
+                const stmtCollapsed = !!collapsedGroups[stmtKey];
+                return (
+                  <div className="card" style={{ padding:0,overflow:"hidden",marginTop:4 }}>
+                    <button onClick={()=>toggleGroup(stmtKey)} aria-expanded={!stmtCollapsed} style={{ width:"100%",textAlign:"left",cursor:"pointer",background:"linear-gradient(90deg,#eff3fb,transparent)",border:"none",borderLeft:"4px solid #1565c0",padding:"14px 16px",fontFamily:"inherit" }}>
+                      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8 }}>
+                        <span style={{ fontWeight:800,fontSize:15,color:"#1a1a2e",display:"flex",alignItems:"center",gap:6 }}>
+                          <span style={{ display:"inline-block",transform:stmtCollapsed?"rotate(-90deg)":"rotate(0)",transition:"transform .15s",color:"#1565c0",fontSize:12 }}>▼</span>
+                          📑 Statement (รายการทั้งหมด)
+                        </span>
+                        <span style={{ fontSize:11,color:"#888",fontWeight:600 }}>{projEntries.length} รายการ</span>
+                      </div>
+                      <div style={{ display:"flex",gap:10,marginTop:6,fontSize:12,flexWrap:"wrap" }}>
+                        <span style={{ color:"#2e7d32",fontWeight:700 }}>รับ ฿{fmt(pIncome)}</span>
+                        <span style={{ color:"#c62828",fontWeight:700 }}>จ่าย ฿{fmt(pExpense)}</span>
+                        <span style={{ color:pNet>=0?"#1565c0":"#c62828",fontWeight:800,marginLeft:"auto" }}>{pNet>=0?"กำไร":"ขาดทุน"} {pNet>=0?"+":"-"}฿{fmt(Math.abs(pNet))}</span>
+                      </div>
+                    </button>
+                    {!stmtCollapsed&&(
+                      <div style={{ padding:"4px 16px 12px" }}>
+                        {projEntries.length===0?<div style={{ fontSize:13,color:"#ccc",textAlign:"center",padding:"20px 0" }}>ยังไม่มีรายการในโครงการนี้</div>
+                        :projEntries.map((e,i)=>(
+                          <div key={e.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:i<projEntries.length-1?"1px solid #f5f5f5":"none" }}>
+                            <div style={{ width:34,height:34,borderRadius:10,background:e.type==="income"?"#e8f5e9":"#ffebee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0 }}>{e.type==="income"?"↑":"↓"}</div>
+                            <div style={{ flex:1,minWidth:0 }}>
+                              <div style={{ fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.description}</div>
+                              <div style={{ fontSize:11,color:"#bbb",marginTop:2 }}>{e.category} · {fmtDate(String(e.date).slice(0,10))}</div>
+                            </div>
+                            <div style={{ textAlign:"right",flexShrink:0 }}>
+                              <div style={{ fontWeight:800,fontSize:14,color:e.type==="income"?"#2e7d32":"#c62828" }}>{e.type==="income"?"+":"-"}฿{fmt(e.amount)}</div>
+                              {(e.vat||e.wht)?<div style={{ fontSize:10,color:"#aaa" }}>{e.vat?`VAT ฿${fmt(e.vat)} `:""}{e.wht?`หัก ฿${fmt(e.wht)}`:""}</div>:null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           );
         })()}
