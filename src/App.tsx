@@ -34,93 +34,28 @@ function formatThousand(s: string): string {
 function parseThousand(s: string): string { return s.replace(/,/g, ""); }
 
 // =========================
-// Passkey (WebAuthn) helpers — gate dashboard with Windows Hello / Touch ID / fingerprint
+// PIN gate — simple SHA-256 hash stored in localStorage
 // =========================
-const PASSKEY_ID_KEY = "wf_passkey_credential_id";
-const PASSKEY_USER_KEY = "wf_passkey_user_id";
+const DEFAULT_PIN = "1202";
+const PIN_HASH_KEY = "wf_pin_hash";
 
-function bufToB64Url(buf: ArrayBufferLike): string {
-  const bytes = new Uint8Array(buf as ArrayBuffer);
-  let s = "";
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+async function sha256Hex(input: string): Promise<string> {
+  const enc = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
 }
-function b64UrlToBuf(b64url: string): ArrayBuffer {
-  const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
-  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
-  const bin = atob(b64 + pad);
-  const out = new ArrayBuffer(bin.length);
-  const view = new Uint8Array(out);
-  for (let i = 0; i < bin.length; i++) view[i] = bin.charCodeAt(i);
-  return out;
+async function getStoredPinHash(): Promise<string> {
+  let h = localStorage.getItem(PIN_HASH_KEY);
+  if (!h) { h = await sha256Hex(DEFAULT_PIN); localStorage.setItem(PIN_HASH_KEY, h); }
+  return h;
 }
-function randomBytes(n: number): ArrayBuffer {
-  const out = new ArrayBuffer(n);
-  crypto.getRandomValues(new Uint8Array(out));
-  return out;
+async function verifyPin(input: string): Promise<boolean> {
+  const stored = await getStoredPinHash();
+  const h = await sha256Hex(input);
+  return h === stored;
 }
-
-function isPasskeySupported(): boolean {
-  return typeof window !== "undefined"
-    && !!window.PublicKeyCredential
-    && typeof navigator.credentials?.create === "function";
-}
-
-function hasPasskeyRegistered(): boolean {
-  return !!localStorage.getItem(PASSKEY_ID_KEY);
-}
-
-async function registerPasskey(): Promise<void> {
-  if (!isPasskeySupported()) throw new Error("เบราว์เซอร์นี้ไม่รองรับ Passkey");
-  // Use an existing user handle if present (allows re-registering to same identity), else create new
-  let userId: ArrayBuffer;
-  const existing = localStorage.getItem(PASSKEY_USER_KEY);
-  if (existing) userId = b64UrlToBuf(existing);
-  else {
-    userId = randomBytes(16);
-    localStorage.setItem(PASSKEY_USER_KEY, bufToB64Url(userId));
-  }
-  const cred = await navigator.credentials.create({
-    publicKey: {
-      challenge: randomBytes(32),
-      rp: { name: "Wadfun Finance", id: window.location.hostname },
-      user: { id: userId, name: "wadfun-ceo", displayName: "Wadfun CEO" },
-      pubKeyCredParams: [
-        { type: "public-key", alg: -7 },   // ES256
-        { type: "public-key", alg: -257 }, // RS256
-      ],
-      authenticatorSelection: {
-        authenticatorAttachment: "platform", // Use built-in (Windows Hello / Touch ID / fingerprint)
-        userVerification: "required",
-        residentKey: "preferred",
-      },
-      timeout: 60000,
-      attestation: "none",
-    },
-  }) as PublicKeyCredential | null;
-  if (!cred) throw new Error("ลงทะเบียน Passkey ไม่สำเร็จ");
-  localStorage.setItem(PASSKEY_ID_KEY, bufToB64Url(cred.rawId));
-}
-
-async function authenticateWithPasskey(): Promise<boolean> {
-  if (!isPasskeySupported()) throw new Error("เบราว์เซอร์นี้ไม่รองรับ Passkey");
-  const credId = localStorage.getItem(PASSKEY_ID_KEY);
-  if (!credId) throw new Error("ยังไม่ได้ลงทะเบียน Passkey");
-  const assertion = await navigator.credentials.get({
-    publicKey: {
-      challenge: randomBytes(32),
-      rpId: window.location.hostname,
-      allowCredentials: [{ type: "public-key", id: b64UrlToBuf(credId) }],
-      userVerification: "required",
-      timeout: 60000,
-    },
-  }) as PublicKeyCredential | null;
-  return !!assertion;
-}
-
-function clearPasskey(): void {
-  localStorage.removeItem(PASSKEY_ID_KEY);
-  localStorage.removeItem(PASSKEY_USER_KEY);
+async function setPinHash(newPin: string): Promise<void> {
+  localStorage.setItem(PIN_HASH_KEY, await sha256Hex(newPin));
 }
 
 // Thai number-to-words (baht)
@@ -514,12 +449,14 @@ export default function App() {
   const [instTab, setInstTab] = useState<InstKind>("receivable");
   const [activeScope, setActiveScope] = useState<InstScope>("design");
   const [deleteInstId, setDeleteInstId] = useState<number|null>(null);
-  const [apiUrlInput, setApiUrlInput] = useState<string>(()=>getApiUrl());
-  // Passkey state — only for the dashboard view (auto-clears on tab change)
+  // PIN state — only for the dashboard view (auto-clears on tab change)
   const [authenticated, setAuthenticated] = useState<boolean>(false);
-  const [passkeyRegistered, setPasskeyRegistered] = useState<boolean>(()=>hasPasskeyRegistered());
-  const [passkeyBusy, setPasskeyBusy] = useState<boolean>(false);
-  const [passkeyError, setPasskeyError] = useState<string|null>(null);
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState<string|null>(null);
+  const [showChangePin, setShowChangePin] = useState(false);
+  const [pinChange, setPinChange] = useState<{ step:"old"|"new"; oldPin:string; newPin:string; confirmPin:string }>(
+    { step:"old", oldPin:"", newPin:"", confirmPin:"" }
+  );
   const [showTaxSummary, setShowTaxSummary] = useState(false);
   const [notifGranted, setNotifGranted] = useState(false);
   const [selectedProject, setSelectedProject] = useState<string|null>(null);
@@ -640,11 +577,12 @@ export default function App() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Auto-logout passkey session when leaving dashboard tab — must re-auth on every entry
+  // Auto-logout PIN session when leaving dashboard tab — must re-enter PIN on every entry
   useEffect(() => {
     if (view !== "dashboard" && authenticated) {
       setAuthenticated(false);
-      setPasskeyError(null);
+      setPinInput("");
+      setPinError(null);
     }
   }, [view, authenticated]);
 
@@ -1037,7 +975,7 @@ export default function App() {
         <button onClick={loadAll} style={{ background:"#1565c0",color:"#fff",border:"none",borderRadius:10,padding:"12px 24px",fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:"pointer" }}>ลองใหม่</button>
         {localStorage.getItem(API_URL_KEY)&&(
           <button
-            onClick={()=>{ localStorage.removeItem(API_URL_KEY); setApiUrlInput(DEFAULT_API); setError(null); loadAll(); }}
+            onClick={()=>{ localStorage.removeItem(API_URL_KEY); setError(null); loadAll(); }}
             style={{ background:"#fff",color:"#c62828",border:"2px solid #c62828",borderRadius:10,padding:"10px 22px",fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:"pointer" }}
           >🔄 รีเซ็ต Apps Script URL เป็นค่าเริ่มต้น</button>
         )}
@@ -1107,59 +1045,33 @@ export default function App() {
 
       <div style={{ maxWidth:900,margin:"0 auto",padding:"20px 16px 140px" }}>
 
-        {/* DASHBOARD — Passkey gate (Windows Hello / Touch ID / fingerprint) */}
+        {/* DASHBOARD — PIN gate */}
         {view==="dashboard"&&!authenticated&&(
           <div className="card" style={{ padding:"36px 24px",maxWidth:420,margin:"40px auto",textAlign:"center" }}>
             <img src="/logo-cropped.jpg" alt="Wadfun" style={{ height:40,width:"auto",display:"block",margin:"0 auto 14px" }}/>
-            <div style={{ fontSize:34,marginBottom:8 }}>👆</div>
+            <div style={{ fontSize:30,marginBottom:6 }}>🔒</div>
             <div style={{ fontWeight:800,fontSize:17,marginBottom:6 }}>หน้าภาพรวม — เฉพาะ CEO</div>
-            <div style={{ fontSize:12,color:"#888",marginBottom:22 }}>
-              {!isPasskeySupported()
-                ? "เบราว์เซอร์นี้ไม่รองรับ Passkey — โปรดใช้ Edge / Chrome / Safari ที่ทันสมัย"
-                : passkeyRegistered
-                  ? "ปลดล็อกด้วย Windows Hello / Touch ID / นิ้วมือ"
-                  : "ตั้งค่า Passkey ครั้งแรก — ใช้ Windows Hello / Touch ID / นิ้วมือ"}
-            </div>
-            {passkeyError&&(
-              <div style={{ color:"#c62828",fontSize:13,marginBottom:14,fontWeight:600,background:"#ffebee",padding:"8px 12px",borderRadius:8,border:"1px solid #ef9a9a" }}>
-                ⚠️ {passkeyError}
-              </div>
-            )}
-            {isPasskeySupported()&&passkeyRegistered&&(
-              <button
-                onClick={async()=>{
-                  setPasskeyBusy(true); setPasskeyError(null);
-                  try {
-                    const ok = await authenticateWithPasskey();
-                    if (ok) setAuthenticated(true);
-                    else setPasskeyError("ปลดล็อกไม่สำเร็จ — ลองอีกครั้ง");
-                  } catch (e) { setPasskeyError((e as Error).message || "ปลดล็อกไม่สำเร็จ"); }
-                  setPasskeyBusy(false);
-                }}
-                disabled={passkeyBusy}
-                style={{ width:"100%",padding:16,fontSize:15,fontWeight:700,fontFamily:"inherit",background:"#1565c0",color:"#fff",border:"none",borderRadius:12,cursor:passkeyBusy?"wait":"pointer" }}
-              >{passkeyBusy?"กำลังตรวจสอบ...":"👆 ปลดล็อกด้วย Passkey"}</button>
-            )}
-            {isPasskeySupported()&&!passkeyRegistered&&(
-              <button
-                onClick={async()=>{
-                  setPasskeyBusy(true); setPasskeyError(null);
-                  try {
-                    await registerPasskey();
-                    setPasskeyRegistered(true);
-                    setAuthenticated(true);
-                    showToast("ลงทะเบียน Passkey สำเร็จ ✅");
-                  } catch (e) { setPasskeyError((e as Error).message || "ลงทะเบียน Passkey ไม่สำเร็จ"); }
-                  setPasskeyBusy(false);
-                }}
-                disabled={passkeyBusy}
-                style={{ width:"100%",padding:16,fontSize:15,fontWeight:700,fontFamily:"inherit",background:"#2e7d32",color:"#fff",border:"none",borderRadius:12,cursor:passkeyBusy?"wait":"pointer" }}
-              >{passkeyBusy?"กำลังตั้งค่า...":"✨ ตั้งค่า Passkey ตอนนี้"}</button>
-            )}
-            <div style={{ marginTop:16,fontSize:11,color:"#aaa",lineHeight:1.5 }}>
-              คุณสามารถดูแท็บอื่นได้โดยไม่ต้องปลดล็อก<br/>
-              ออกจากแท็บภาพรวม → ปลดล็อกใหม่ทุกครั้ง
-            </div>
+            <div style={{ fontSize:12,color:"#888",marginBottom:22 }}>กรอก PIN เพื่อดูข้อมูลสรุปและภาษี</div>
+            <form onSubmit={async (e)=>{
+              e.preventDefault();
+              const ok = await verifyPin(pinInput);
+              if (ok) { setAuthenticated(true); setPinInput(""); setPinError(null); }
+              else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
+            }}>
+              <input
+                type="password"
+                inputMode="numeric"
+                autoFocus
+                maxLength={6}
+                placeholder="• • • •"
+                value={pinInput}
+                onChange={e=>{ setPinInput(e.target.value.replace(/\D/g,"")); setPinError(null); }}
+                style={{ width:"100%",padding:"16px 18px",fontSize:24,letterSpacing:"0.4em",textAlign:"center",border:`2px solid ${pinError?"#c62828":"#e0e4f0"}`,borderRadius:14,outline:"none",fontFamily:"inherit",background:"#f8f9ff" }}
+              />
+              {pinError&&<div style={{ color:"#c62828",fontSize:13,marginTop:10,fontWeight:600 }}>⚠️ {pinError}</div>}
+              <button type="submit" disabled={pinInput.length<4} style={{ width:"100%",marginTop:16,padding:14,fontSize:15,fontWeight:700,fontFamily:"inherit",background:pinInput.length<4?"#bbb":"#1565c0",color:"#fff",border:"none",borderRadius:12,cursor:pinInput.length<4?"not-allowed":"pointer" }}>ดูหน้าภาพรวม</button>
+            </form>
+            <div style={{ marginTop:16,fontSize:11,color:"#aaa" }}>คุณสามารถดูแท็บอื่นได้โดยไม่ต้องใส่ PIN</div>
           </div>
         )}
 
@@ -1900,117 +1812,19 @@ export default function App() {
 
             <div className="card" style={{ padding:18 }}>
               <div className="stitle" style={{ marginBottom:14 }}>🔒 ความปลอดภัย</div>
-              <div style={{ padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
-                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:10 }}>
-                  <div style={{ flex:1,minWidth:0 }}>
-                    <div style={{ fontSize:14,fontWeight:600 }}>👆 Passkey (Windows Hello / Touch ID)</div>
-                    <div style={{ fontSize:11,color:"#888",marginTop:2 }}>
-                      {!isPasskeySupported()
-                        ? "เบราว์เซอร์นี้ไม่รองรับ"
-                        : passkeyRegistered
-                          ? "✅ ลงทะเบียนแล้ว — ใช้ปลดล็อกหน้าภาพรวม"
-                          : "ยังไม่ได้ตั้งค่า"}
-                    </div>
-                  </div>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",gap:10 }}>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ fontSize:14,fontWeight:600 }}>PIN เข้าหน้าภาพรวม</div>
+                  <div style={{ fontSize:11,color:"#888",marginTop:2 }}>กรอก PIN ปัจจุบัน → ตั้ง PIN ใหม่ — มีผลทันที</div>
                 </div>
-                {isPasskeySupported()&&(
-                  <div style={{ display:"flex",gap:8,marginTop:10 }}>
-                    {!passkeyRegistered&&(
-                      <button
-                        className="btn btn-green"
-                        disabled={passkeyBusy}
-                        onClick={async()=>{
-                          setPasskeyBusy(true);
-                          try {
-                            await registerPasskey();
-                            setPasskeyRegistered(true);
-                            showToast("ลงทะเบียน Passkey สำเร็จ ✅");
-                          } catch (e) { showToast("ล้มเหลว: "+((e as Error).message||"unknown"),"err"); }
-                          setPasskeyBusy(false);
-                        }}
-                        style={{ flex:1,fontSize:13,padding:10 }}
-                      >✨ ตั้งค่า Passkey</button>
-                    )}
-                    {passkeyRegistered&&(
-                      <>
-                        <button
-                          className="btn btn-outline"
-                          disabled={passkeyBusy}
-                          onClick={async()=>{
-                            setPasskeyBusy(true);
-                            try {
-                              await registerPasskey();
-                              showToast("ลงทะเบียน Passkey ใหม่ทับของเดิมแล้ว ✅");
-                            } catch (e) { showToast("ล้มเหลว: "+((e as Error).message||"unknown"),"err"); }
-                            setPasskeyBusy(false);
-                          }}
-                          style={{ flex:1,fontSize:13,padding:10 }}
-                        >🔄 ลงทะเบียนใหม่</button>
-                        <button
-                          className="btn btn-red"
-                          onClick={()=>{
-                            if (!confirm("ล้าง Passkey? — ครั้งถัดไปต้องตั้งค่าใหม่")) return;
-                            clearPasskey();
-                            setPasskeyRegistered(false);
-                            setAuthenticated(false);
-                            showToast("ล้าง Passkey แล้ว","err");
-                          }}
-                          style={{ flex:1,fontSize:13,padding:10 }}
-                        >🗑️ ล้าง</button>
-                      </>
-                    )}
-                  </div>
-                )}
-                <div style={{ marginTop:10,fontSize:11,color:"#888",lineHeight:1.5 }}>
-                  🔒 ออกจากแท็บภาพรวม → ปลดล็อกใหม่ทุกครั้ง
-                </div>
+                <button
+                  className="btn btn-outline"
+                  onClick={()=>{ setPinChange({ step:"old",oldPin:"",newPin:"",confirmPin:"" }); setShowChangePin(true); }}
+                  style={{ fontSize:13,padding:"8px 14px",whiteSpace:"nowrap" }}
+                >เปลี่ยน PIN</button>
               </div>
-              <div style={{ padding:"12px 0" }}>
-                <div style={{ fontSize:14,fontWeight:600 }}>🔗 Apps Script URL</div>
-                <div style={{ fontSize:11,color:"#888",marginTop:2,marginBottom:8 }}>
-                  ถ้าสร้าง deployment ใหม่และได้ URL ใหม่ ให้วาง URL ใหม่ที่นี่ (ปล่อยว่างเพื่อใช้ค่าเริ่มต้น)
-                </div>
-                <input
-                  type="url"
-                  value={apiUrlInput}
-                  onChange={e=>setApiUrlInput(e.target.value)}
-                  placeholder={DEFAULT_API}
-                  style={{ fontSize:12,fontFamily:"monospace" }}
-                />
-                <div style={{ display:"flex",gap:8,marginTop:8 }}>
-                  <button
-                    className="btn btn-primary"
-                    onClick={async()=>{
-                      const v = apiUrlInput.trim();
-                      if (!v) { localStorage.removeItem(API_URL_KEY); showToast("กลับไปใช้ URL เริ่มต้น"); setApiUrlInput(DEFAULT_API); loadAll(); return; }
-                      try { new URL(v); } catch { showToast("URL ไม่ถูกต้อง","err"); return; }
-                      // Test BEFORE saving — prevent lockout on bad URLs
-                      setSaving(true);
-                      try {
-                        const testUrl = new URL(v);
-                        testUrl.searchParams.set("action","getProjects");
-                        const res = await (await fetch(testUrl.toString())).json();
-                        if (res && res.ok) {
-                          localStorage.setItem(API_URL_KEY, v);
-                          showToast("บันทึก URL ใหม่สำเร็จ ✅");
-                          loadAll();
-                        } else {
-                          showToast("URL ตอบกลับผิดพลาด ("+(res&&res.error?res.error:"unknown")+") — ยังไม่บันทึก","err");
-                        }
-                      } catch (e) {
-                        console.error("[apiUrl test] error:", e);
-                        showToast("ติดต่อ URL ไม่สำเร็จ — ยังไม่บันทึก","err");
-                      }
-                      setSaving(false);
-                    }}
-                    style={{ flex:1,padding:10,fontSize:13 }}
-                  >บันทึก URL</button>
-                  <button
-                    className="btn btn-ghost"
-                    onClick={()=>{ localStorage.removeItem(API_URL_KEY); setApiUrlInput(DEFAULT_API); showToast("รีเซ็ตเป็น URL เริ่มต้น"); loadAll(); }}
-                    style={{ padding:"10px 14px",fontSize:13 }}
-                  >รีเซ็ต</button>
-                </div>
+              <div style={{ padding:"8px 0 0",fontSize:11,color:"#888",lineHeight:1.5,borderTop:"1px solid #f0f0f0",marginTop:6 }}>
+                🔒 PIN จะถูกล็อกอัตโนมัติทุกครั้งที่ออกจากแท็บ "ภาพรวม" — เข้าครั้งถัดไปต้องกรอกใหม่
               </div>
             </div>
 
@@ -2507,6 +2321,61 @@ export default function App() {
                 {saving?"กำลังลบ...":"ลบรายการ"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* CHANGE PIN MODAL — simple 2-step */}
+      {showChangePin&&(
+        <div className="modal-bg" onClick={()=>setShowChangePin(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+            <div style={{ fontSize:32,textAlign:"center",marginBottom:6 }}>🔒</div>
+            <div style={{ fontWeight:800,fontSize:18,textAlign:"center",marginBottom:6 }}>เปลี่ยน PIN เข้าใช้งาน</div>
+            <div style={{ fontSize:12,color:"#888",textAlign:"center",marginBottom:18 }}>ขั้นตอนที่ {pinChange.step==="old"?1:2} / 2</div>
+
+            {pinChange.step==="old"&&(
+              <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+                <label style={{ fontSize:13,fontWeight:600,color:"#666" }}>PIN ปัจจุบัน</label>
+                <input type="password" inputMode="numeric" autoFocus maxLength={6} placeholder="• • • •" value={pinChange.oldPin}
+                  onChange={e=>setPinChange(p=>({...p,oldPin:e.target.value.replace(/\D/g,"")}))}
+                  style={{ padding:"14px 16px",fontSize:20,letterSpacing:"0.3em",textAlign:"center" }}/>
+                <div style={{ display:"flex",gap:10,marginTop:6 }}>
+                  <button className="btn btn-ghost" onClick={()=>setShowChangePin(false)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
+                  <button className="btn btn-primary" disabled={pinChange.oldPin.length<4} onClick={async()=>{
+                    const ok = await verifyPin(pinChange.oldPin);
+                    if (!ok) { showToast("PIN ปัจจุบันไม่ถูกต้อง","err"); return; }
+                    setPinChange(p=>({...p,step:"new"}));
+                  }} style={{ flex:2,padding:13 }}>ถัดไป</button>
+                </div>
+              </div>
+            )}
+
+            {pinChange.step==="new"&&(
+              <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+                <label style={{ fontSize:13,fontWeight:600,color:"#666" }}>PIN ใหม่ (4-6 หลัก)</label>
+                <input type="password" inputMode="numeric" autoFocus maxLength={6} placeholder="• • • •" value={pinChange.newPin}
+                  onChange={e=>setPinChange(p=>({...p,newPin:e.target.value.replace(/\D/g,"")}))}
+                  style={{ padding:"14px 16px",fontSize:20,letterSpacing:"0.3em",textAlign:"center" }}/>
+                <label style={{ fontSize:13,fontWeight:600,color:"#666" }}>ยืนยัน PIN ใหม่</label>
+                <input type="password" inputMode="numeric" maxLength={6} placeholder="• • • •" value={pinChange.confirmPin}
+                  onChange={e=>setPinChange(p=>({...p,confirmPin:e.target.value.replace(/\D/g,"")}))}
+                  style={{ padding:"14px 16px",fontSize:20,letterSpacing:"0.3em",textAlign:"center" }}/>
+                <div style={{ fontSize:11,color:"#bf360c",lineHeight:1.5,background:"#fff3e0",padding:"8px 12px",borderRadius:8,border:"1px solid #ffcc80" }}>
+                  ⚠️ PIN ใหม่จะมีผลทันทีที่กด "บันทึก PIN ใหม่"
+                </div>
+                <div style={{ display:"flex",gap:10,marginTop:6 }}>
+                  <button className="btn btn-ghost" onClick={()=>setPinChange(p=>({...p,step:"old"}))} style={{ flex:1,padding:13 }}>← ย้อน</button>
+                  <button className="btn btn-primary" disabled={pinChange.newPin.length<4||pinChange.newPin!==pinChange.confirmPin} onClick={async()=>{
+                    if (pinChange.newPin.length<4) { showToast("PIN ใหม่อย่างน้อย 4 หลัก","err"); return; }
+                    if (pinChange.newPin!==pinChange.confirmPin) { showToast("PIN ไม่ตรงกัน","err"); return; }
+                    await setPinHash(pinChange.newPin);
+                    setShowChangePin(false);
+                    showToast("เปลี่ยน PIN สำเร็จ ✅");
+                  }} style={{ flex:2,padding:13 }}>บันทึก PIN ใหม่</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
