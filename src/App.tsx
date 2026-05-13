@@ -1083,6 +1083,67 @@ export default function App() {
               <div style={{ fontSize:12,color:net>=0?"#2e7d32":"#c62828",marginTop:4,fontWeight:600 }}>{net>=0?"▲ กำไร":"▼ ขาดทุน"}</div>
             </div>
 
+            {/* P&L per project */}
+            <div className="card" style={{ padding:20 }}>
+              <div className="stitle">📊 กำไรขาดทุนต่อโครงการ</div>
+              <div style={{ fontSize:11,color:"#aaa",marginTop:-8,marginBottom:14 }}>คำนวณจากงวดเบิก/งวดจ่ายที่รับ/จ่ายเงินแล้ว</div>
+              {projects.length===0 ? (
+                <div style={{ color:"#bbb",textAlign:"center",padding:"24px 0",fontSize:14 }}>ยังไม่มีโครงการ</div>
+              ) : (()=>{
+                const rows = projects.map(p=>{
+                  const projInst = installments.filter(i=>i.project===p);
+                  const projExpEntries = entries.filter(e=>e.project===p&&e.type==="expense");
+                  const designInc = projInst.filter(i=>i.scope==="design"&&i.kind==="receivable"&&i.status==="received").reduce((s,i)=>s+i.amount,0);
+                  const designExp = projInst.filter(i=>i.scope==="design"&&i.kind==="payable"&&i.status==="paid").reduce((s,i)=>s+i.amount,0);
+                  const constInc = projInst.filter(i=>i.scope==="construction"&&i.kind==="receivable"&&i.status==="received").reduce((s,i)=>s+i.amount,0);
+                  const constExp = projInst.filter(i=>i.scope==="construction"&&i.kind==="payable"&&i.status==="paid").reduce((s,i)=>s+i.amount,0);
+                  const legacyExp = projExpEntries.reduce((s,e)=>s+e.amount,0);
+                  const inc = designInc + constInc;
+                  const exp = designExp + constExp + legacyExp;
+                  const n = inc - exp;
+                  const m = inc>0 ? (n/inc)*100 : 0;
+                  return { p, inc, exp, n, m, designInc, designExp, designNet: designInc-designExp, constInc, constExp, constNet: constInc-constExp };
+                }).filter(r=>r.inc>0||r.exp>0)
+                  .sort((a,b)=>b.n - a.n);
+                if (rows.length===0) return <div style={{ color:"#bbb",textAlign:"center",padding:"24px 0",fontSize:14 }}>ยังไม่มีงวดที่รับ/จ่ายแล้ว</div>;
+                return (
+                  <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+                    {rows.map(r=>(
+                      <div key={r.p} style={{ borderLeft:`4px solid ${r.n>=0?"#2e7d32":"#c62828"}`,background:r.n>=0?"#f8fff8":"#fff5f5",borderRadius:10,padding:"12px 14px" }}>
+                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:10 }}>
+                          <span style={{ fontWeight:800,fontSize:15 }}>📁 {r.p}</span>
+                          <span style={{ fontWeight:800,fontSize:17,color:r.n>=0?"#2e7d32":"#c62828",whiteSpace:"nowrap" }}>{r.n>=0?"+":"-"}฿{fmt(Math.abs(r.n))}</span>
+                        </div>
+                        <div style={{ display:"flex",gap:14,marginTop:6,fontSize:12,flexWrap:"wrap" }}>
+                          <span style={{ color:"#2e7d32" }}>↑ รับ ฿{fmt(r.inc)}</span>
+                          <span style={{ color:"#c62828" }}>↓ จ่าย ฿{fmt(r.exp)}</span>
+                          <span style={{ color:"#888",marginLeft:"auto" }}>Margin <b style={{ color:r.m>=0?"#2e7d32":"#c62828" }}>{r.m.toFixed(1)}%</b></span>
+                        </div>
+                        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:10 }}>
+                          <div style={{ background:"#fff",borderRadius:8,padding:"8px 10px",border:"1px solid #eef0f8" }}>
+                            <div style={{ fontSize:10,color:"#888",marginBottom:2,fontWeight:600 }}>✏️ งานออกแบบ</div>
+                            <div style={{ fontWeight:700,fontSize:13,color:r.designNet>=0?"#2e7d32":"#c62828" }}>{r.designNet>=0?"+":"-"}฿{fmt(Math.abs(r.designNet))}</div>
+                            <div style={{ fontSize:10,color:"#aaa",marginTop:1 }}>รับ {fmt(r.designInc)} · จ่าย {fmt(r.designExp)}</div>
+                          </div>
+                          <div style={{ background:"#fff",borderRadius:8,padding:"8px 10px",border:"1px solid #eef0f8" }}>
+                            <div style={{ fontSize:10,color:"#888",marginBottom:2,fontWeight:600 }}>🏗️ งานก่อสร้าง</div>
+                            <div style={{ fontWeight:700,fontSize:13,color:r.constNet>=0?"#2e7d32":"#c62828" }}>{r.constNet>=0?"+":"-"}฿{fmt(Math.abs(r.constNet))}</div>
+                            <div style={{ fontSize:10,color:"#aaa",marginTop:1 }}>รับ {fmt(r.constInc)} · จ่าย {fmt(r.constExp)}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    <div style={{ background:"linear-gradient(90deg,#eff3fb,#f8f9ff)",borderRadius:10,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:4 }}>
+                      <span style={{ fontSize:13,fontWeight:700,color:"#666" }}>รวมทุกโครงการ</span>
+                      <span style={{ fontSize:16,fontWeight:800,color:rows.reduce((s,r)=>s+r.n,0)>=0?"#1565c0":"#c62828" }}>
+                        {rows.reduce((s,r)=>s+r.n,0)>=0?"+":"-"}฿{fmt(Math.abs(rows.reduce((s,r)=>s+r.n,0)))}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
             {/* Tax summary card */}
             <div className="card" style={{ padding:16 }}>
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
@@ -1320,7 +1381,6 @@ export default function App() {
           const pIncome = projInst.filter(i=>i.kind==="receivable"&&i.status==="received").reduce((s,i)=>s+i.amount,0);
           const pExpense = projInst.filter(i=>i.kind==="payable"&&i.status==="paid").reduce((s,i)=>s+i.amount,0);
           const pNet = pIncome - pExpense;
-          const margin = pIncome>0 ? (pNet/pIncome)*100 : 0;
           const tabList = projInst.filter(i=>i.kind===instTab).sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
           const tabPending = tabList.filter(i=>i.status==="pending");
           const tabDone = tabList.filter(i=>i.status!=="pending");
@@ -1410,31 +1470,6 @@ export default function App() {
                   </div>
                 );
               })()}
-
-              {/* P&L summary card (per scope) */}
-              <div className="card" style={{ padding:0,overflow:"hidden" }}>
-                <div style={{ padding:"12px 16px",background:"#f8f9ff",borderBottom:"1px solid #eef0f8",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
-                  <div className="stitle" style={{ margin:0 }}>กำไรขาดทุน (P&amp;L) — {scopeLabel(activeScope)}</div>
-                  <div style={{ fontSize:11,color:"#aaa" }}>{projInst.length} งวด</div>
-                </div>
-                <div style={{ padding:"4px 16px" }}>
-                  <div style={{ display:"flex",justifyContent:"space-between",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
-                    <span style={{ fontSize:14,color:"#666" }}>รายรับรวม</span>
-                    <span style={{ fontSize:15,fontWeight:700,color:"#2e7d32" }}>+฿{fmt(pIncome)}</span>
-                  </div>
-                  <div style={{ display:"flex",justifyContent:"space-between",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
-                    <span style={{ fontSize:14,color:"#666" }}>รายจ่ายรวม</span>
-                    <span style={{ fontSize:15,fontWeight:700,color:"#c62828" }}>-฿{fmt(pExpense)}</span>
-                  </div>
-                  <div style={{ display:"flex",justifyContent:"space-between",padding:"14px 0",borderTop:"2px solid #e0e0e0",marginTop:2,background:pNet>=0?"linear-gradient(90deg,#e8f5e9,transparent)":"linear-gradient(90deg,#ffebee,transparent)",margin:"0 -16px",paddingLeft:16,paddingRight:16 }}>
-                    <span style={{ fontSize:15,fontWeight:800 }}>{pNet>=0?"📈 กำไรสุทธิ":"📉 ขาดทุนสุทธิ"}</span>
-                    <span style={{ fontSize:18,fontWeight:800,color:pNet>=0?"#2e7d32":"#c62828" }}>{pNet>=0?"+":"-"}฿{fmt(Math.abs(pNet))}</span>
-                  </div>
-                  <div style={{ padding:"10px 0",fontSize:12,color:"#888",textAlign:"right" }}>
-                    Margin: <b style={{ color:margin>=0?"#2e7d32":"#c62828" }}>{margin.toFixed(2)}%</b>
-                  </div>
-                </div>
-              </div>
 
               {/* Projected with installments */}
               {(recvPending>0||payPending>0)&&(
