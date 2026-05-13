@@ -26,6 +26,8 @@
 const ENTRY_SHEET = "Entries";
 const PROJECT_SHEET = "Projects";
 const ENTRY_COLS = 11; // A..K
+// Projects sheet columns: A: name, B: address, C: ownerName, D: ownerPhone, E: ownerTaxId
+const PROJECT_COLS = 5;
 
 function _entrySheet()   { return SpreadsheetApp.getActive().getSheetByName(ENTRY_SHEET); }
 function _projectSheet() { return SpreadsheetApp.getActive().getSheetByName(PROJECT_SHEET); }
@@ -115,15 +117,77 @@ function getProjects() {
   const sheet = _projectSheet();
   const last = sheet.getLastRow();
   if (last < 2) return { ok: true, projects: [] };
-  const data = sheet.getRange(2, 1, last - 1, 1).getValues();
-  const projects = data.map(r => String(r[0] || "").trim()).filter(Boolean);
+  const lastCol = Math.max(1, sheet.getLastColumn());
+  const colsToRead = Math.min(PROJECT_COLS, Math.max(lastCol, 1));
+  const data = sheet.getRange(2, 1, last - 1, colsToRead).getValues();
+  const projects = data
+    .filter(r => String(r[0] || "").trim())
+    .map(r => ({
+      name: String(r[0] || "").trim(),
+      address: String(r[1] || ""),
+      ownerName: String(r[2] || ""),
+      ownerPhone: String(r[3] || ""),
+      ownerTaxId: String(r[4] || ""),
+    }));
   return { ok: true, projects };
 }
 
-function addProject(name) {
+function addProject(body) {
   const sheet = _projectSheet();
-  sheet.appendRow([String(name || "").trim()]);
+  const name = String(body && body.name || "").trim();
+  if (!name) return { ok: false, error: "missing name" };
+  sheet.appendRow([
+    name,
+    String(body.address || ""),
+    String(body.ownerName || ""),
+    String(body.ownerPhone || ""),
+    String(body.ownerTaxId || ""),
+  ]);
   return { ok: true };
+}
+
+/**
+ * Update a project row. Body: { oldName, name, address, ownerName, ownerPhone, ownerTaxId }
+ * If name !== oldName, cascading rename across the Entries sheet's project column (E).
+ */
+function updateProject(body) {
+  const sheet = _projectSheet();
+  const last = sheet.getLastRow();
+  if (last < 2) return { ok: false, error: "no rows" };
+  const oldName = String(body && body.oldName || "").trim();
+  const newName = String(body.name || "").trim();
+  if (!oldName || !newName) return { ok: false, error: "missing names" };
+  const data = sheet.getRange(2, 1, last - 1, 1).getValues();
+  for (let i = 0; i < data.length; i++) {
+    if (String(data[i][0]).trim() === oldName) {
+      sheet.getRange(i + 2, 1, 1, PROJECT_COLS).setValues([[
+        newName,
+        String(body.address || ""),
+        String(body.ownerName || ""),
+        String(body.ownerPhone || ""),
+        String(body.ownerTaxId || ""),
+      ]]);
+      // Cascade rename in Entries sheet (column E)
+      if (oldName !== newName) {
+        const esheet = _entrySheet();
+        const elast = esheet.getLastRow();
+        if (elast >= 2) {
+          const erange = esheet.getRange(2, 5, elast - 1, 1);
+          const evals = erange.getValues();
+          let changed = false;
+          for (let j = 0; j < evals.length; j++) {
+            if (String(evals[j][0]).trim() === oldName) {
+              evals[j][0] = newName;
+              changed = true;
+            }
+          }
+          if (changed) erange.setValues(evals);
+        }
+      }
+      return { ok: true };
+    }
+  }
+  return { ok: false, error: "not found" };
 }
 
 function deleteProject(name) {
@@ -174,7 +238,8 @@ function _route(action, params, body) {
     case "addEntry":         return addEntry(body || {});
     case "updateEntry":      return updateEntry(body || {});
     case "deleteEntry":      return deleteEntry(params.id);
-    case "addProject":       return addProject(params.name);
+    case "addProject":       return addProject(body || { name: params.name });
+    case "updateProject":    return updateProject(body || {});
     case "deleteProject":    return deleteProject(params.name);
     case "notifyPinChange":  return notifyPinChange(body || {});
     default:                 return { ok: false, error: "unknown action: " + action };

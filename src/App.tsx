@@ -129,6 +129,7 @@ function buildDocHTML(opts: {
   docNo: string;
   dateStr: string;
   customerName: string;
+  customerInfo?: { address?: string; ownerName?: string; phone?: string; taxId?: string };
   itemName: string;
   description?: string;
   amount: number;
@@ -148,7 +149,10 @@ function buildDocHTML(opts: {
   const signerLeftRole = isInv ? "ผู้อนุมัติ" : "ผู้รับเงิน";
   const signerLeftName = isInv ? `(${COMPANY.approver}) ตัวแทนขาย` : `(คุณ${COMPANY.approver.replace(/^นาย/,"")}) ตัวแทนขาย`;
   const signerRightRole = isInv ? "ผู้รับใบแจ้งหนี้" : "ผู้จ่ายเงิน";
-  const signerRightName = `(${opts.customerName}) ผู้อนุมัติ`;
+  const ci = opts.customerInfo || {};
+  const displayCustomer = (ci.ownerName && ci.ownerName.trim()) || opts.customerName;
+  const escHtml = (s: string) => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const signerRightName = `(${displayCustomer}) ผู้อนุมัติ`;
 
   return `
 <div style="width:794px;background:#fff;padding:36px 44px;font-family:'Sarabun',sans-serif;color:#111;box-sizing:border-box;font-size:13px;">
@@ -176,12 +180,16 @@ function buildDocHTML(opts: {
       <div>เลขประจำตัวผู้เสียภาษี: ${COMPANY.taxId}</div>
       <div>โทร: ${COMPANY.tel}</div>
     </div>
-    <div style="min-width:240px;text-align:right;">
+    <div style="min-width:280px;text-align:right;">
       <div><b>เลขที่:</b> ${opts.docNo}</div>
       <div><b>วันที่:</b> ${opts.dateStr}</div>
       <div style="margin-top:10px;text-align:left;background:#f5f5f5;padding:8px 10px;border-radius:6px;">
         <div style="font-weight:700;font-size:11px;color:#666;">ลูกค้า / Customer</div>
-        <div style="font-size:14px;font-weight:700;">${opts.customerName}</div>
+        <div style="font-size:14px;font-weight:700;">${escHtml(displayCustomer)}</div>
+        ${ci.address ? `<div style="font-size:11px;color:#555;margin-top:3px;line-height:1.4;">${escHtml(ci.address)}</div>` : ""}
+        ${ci.taxId ? `<div style="font-size:11px;color:#555;margin-top:2px;">เลขประจำตัวผู้เสียภาษี: ${escHtml(ci.taxId)}</div>` : ""}
+        ${ci.phone ? `<div style="font-size:11px;color:#555;">โทร: ${escHtml(ci.phone)}</div>` : ""}
+        ${ci.ownerName && opts.customerName && opts.customerName !== ci.ownerName ? `<div style="font-size:11px;color:#888;margin-top:3px;border-top:1px dashed #ddd;padding-top:3px;">โครงการ: ${escHtml(opts.customerName)}</div>` : ""}
       </div>
     </div>
   </div>
@@ -271,6 +279,7 @@ function buildDocHTML(opts: {
 async function generateDocPDF(kind: "invoice"|"receipt", opts: {
   docNo: string;
   customerName: string;
+  customerInfo?: { address?: string; ownerName?: string; phone?: string; taxId?: string };
   itemName: string;
   description?: string;
   amount: number;
@@ -351,6 +360,8 @@ const WORK_CATS_BY_SCOPE: Record<InstScope, string[]> = {
 
 interface ProjectScopeTax { hasVat: boolean; hasWht: boolean; whtRate: number; }
 interface ProjectTaxSettings { design: ProjectScopeTax; construction: ProjectScopeTax; }
+interface ProjectInfo { name: string; address: string; ownerName: string; ownerPhone: string; ownerTaxId: string; }
+const emptyProjectInfo: ProjectInfo = { name: "", address: "", ownerName: "", ownerPhone: "", ownerTaxId: "" };
 interface Installment { id: number; kind: InstKind; scope: InstScope; workCategory: string; project: string; name: string; description?: string; amount: number; dueDate: string; status: InstStatus; completedDate?: string; invoiceNo?: string; receiptNo?: string; hasVat?: boolean; hasWht?: boolean; whtRate?: number; }
 interface FormState { date: string; type: string; category: string; project: string; description: string; amount: string; useVat: boolean; useWht: boolean; }
 interface InstForm { kind: InstKind; scope: InstScope; workCategory: string; project: string; name: string; description: string; amount: string; dueDate: string; }
@@ -430,6 +441,8 @@ export default function App() {
   const [deleteId, setDeleteId] = useState<number|null>(null);
   const [showProjMgr, setShowProjMgr] = useState(false);
   const [newProj, setNewProj] = useState("");
+  const [projectInfos, setProjectInfos] = useState<Record<string, ProjectInfo>>({});
+  const [editProj, setEditProj] = useState<{ mode:"add"|"edit"; oldName:string; form:ProjectInfo }|null>(null);
   const [toast, setToast] = useState<{msg:string,type:string}|null>(null);
   const [showInstForm, setShowInstForm] = useState(false);
   const [instForm, setInstForm] = useState<InstForm>({ kind:"receivable", scope:"design", workCategory: WORK_CATS_BY_SCOPE.design[0], project:"", name:"งวดที่ 1", description:"", amount:"", dueDate:"" });
@@ -513,7 +526,18 @@ export default function App() {
         });
         setEntries(normalized);
       }
-      if (pRes.ok) setProjects(pRes.projects);
+      if (pRes.ok) {
+        // Backend may return either string[] (legacy) or ProjectInfo[] (current)
+        const raw = pRes.projects as Array<string | Partial<ProjectInfo>>;
+        const list: ProjectInfo[] = raw.map(p => typeof p === "string"
+          ? { ...emptyProjectInfo, name: p }
+          : { name: p.name || "", address: p.address || "", ownerName: p.ownerName || "", ownerPhone: p.ownerPhone || "", ownerTaxId: p.ownerTaxId || "" }
+        ).filter(p => p.name);
+        setProjects(list.map(p => p.name));
+        const map: Record<string, ProjectInfo> = {};
+        list.forEach(p => { map[p.name] = p; });
+        setProjectInfos(map);
+      }
       // load installments from localStorage (migrate older records)
       const saved = localStorage.getItem("wf_installments");
       if (saved) {
@@ -631,7 +655,8 @@ export default function App() {
     }
     showToast("กำลังสร้างใบวางบิล...");
     try {
-      await generateDocPDF("invoice", { docNo: invoiceNo, customerName: inst.project, itemName: inst.name, description: inst.description, amount: inst.amount, hasVat: inst.hasVat, hasWht: inst.hasWht, whtRate: inst.whtRate });
+      const pInfo = projectInfos[inst.project];
+      await generateDocPDF("invoice", { docNo: invoiceNo, customerName: inst.project, customerInfo: pInfo ? { address: pInfo.address, ownerName: pInfo.ownerName, phone: pInfo.ownerPhone, taxId: pInfo.ownerTaxId } : undefined, itemName: inst.name, description: inst.description, amount: inst.amount, hasVat: inst.hasVat, hasWht: inst.hasWht, whtRate: inst.whtRate });
       showToast("สร้างใบวางบิลสำเร็จ");
     } catch (e) { console.error(e); showToast("สร้าง PDF ไม่สำเร็จ", "err"); }
   }
@@ -644,7 +669,8 @@ export default function App() {
     }
     showToast("กำลังสร้างใบเสร็จ...");
     try {
-      await generateDocPDF("receipt", { docNo: receiptNo, customerName: inst.project, itemName: inst.name, description: inst.description, amount: inst.amount, hasVat: inst.hasVat, hasWht: inst.hasWht, whtRate: inst.whtRate });
+      const pInfo = projectInfos[inst.project];
+      await generateDocPDF("receipt", { docNo: receiptNo, customerName: inst.project, customerInfo: pInfo ? { address: pInfo.address, ownerName: pInfo.ownerName, phone: pInfo.ownerPhone, taxId: pInfo.ownerTaxId } : undefined, itemName: inst.name, description: inst.description, amount: inst.amount, hasVat: inst.hasVat, hasWht: inst.hasWht, whtRate: inst.whtRate });
       showToast("สร้างใบเสร็จสำเร็จ");
     } catch (e) { console.error(e); showToast("สร้าง PDF ไม่สำเร็จ", "err"); }
   }
@@ -703,9 +729,54 @@ export default function App() {
 
   async function addProject() {
     if (!newProj.trim() || projects.includes(newProj.trim())) return;
+    const info: ProjectInfo = { ...emptyProjectInfo, name: newProj.trim() };
     setSaving(true);
-    try { await apiGet("addProject", {name:newProj.trim()}); setProjects(p=>[...p,newProj.trim()]); setNewProj(""); }
+    try {
+      await apiPost("addProject", info);
+      setProjects(p=>[...p,info.name]);
+      setProjectInfos(m=>({ ...m, [info.name]: info }));
+      setNewProj("");
+    }
     catch { showToast("เพิ่มโครงการไม่สำเร็จ","err"); }
+    setSaving(false);
+  }
+
+  async function saveProjectInfo() {
+    if (!editProj) return;
+    const { mode, oldName, form } = editProj;
+    const newName = form.name.trim();
+    if (!newName) { showToast("กรุณากรอกชื่อโครงการ","err"); return; }
+    if (mode==="add" && projects.includes(newName)) { showToast("มีโครงการชื่อนี้แล้ว","err"); return; }
+    if (mode==="edit" && newName!==oldName && projects.includes(newName)) { showToast("มีโครงการชื่อนี้แล้ว","err"); return; }
+    const payload: ProjectInfo = { ...form, name: newName };
+    setSaving(true);
+    try {
+      if (mode==="add") {
+        await apiPost("addProject", payload);
+        setProjects(p=>[...p,newName]);
+        setProjectInfos(m=>({ ...m, [newName]: payload }));
+        showToast("เพิ่มโครงการสำเร็จ");
+      } else {
+        await apiPost("updateProject", { oldName, ...payload });
+        // Cascade local rename
+        if (newName!==oldName) {
+          setProjects(ps=>ps.map(x=>x===oldName?newName:x));
+          setEntries(es=>es.map(e=>e.project===oldName?{ ...e, project:newName }:e));
+          saveInstallments(installments.map(i=>i.project===oldName?{ ...i, project:newName }:i));
+          const nextTax = { ...projectTax };
+          if (nextTax[oldName]) { nextTax[newName] = nextTax[oldName]; delete nextTax[oldName]; saveProjectTax(nextTax); }
+          if (selectedProject===oldName) setSelectedProject(newName);
+        }
+        setProjectInfos(m=>{
+          const next = { ...m };
+          if (newName!==oldName) delete next[oldName];
+          next[newName] = payload;
+          return next;
+        });
+        showToast("บันทึกข้อมูลโครงการสำเร็จ");
+      }
+      setEditProj(null);
+    } catch { showToast("บันทึกไม่สำเร็จ — ตรวจ Apps Script deploy","err"); }
     setSaving(false);
   }
 
@@ -1784,15 +1855,13 @@ export default function App() {
             </div>
 
             <div className="card" style={{ padding:14 }}>
-              <div style={{ display:"flex",gap:8 }}>
-                <input
-                  placeholder="ชื่อโครงการใหม่..."
-                  value={newProj}
-                  onChange={e=>setNewProj(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&addProject()}
-                  style={{ flex:1 }}
-                />
-                <button className="btn btn-green" onClick={addProject} disabled={saving} style={{ whiteSpace:"nowrap" }}>+ เพิ่ม</button>
+              <button
+                className="btn btn-green"
+                onClick={()=>setEditProj({ mode:"add", oldName:"", form:{ ...emptyProjectInfo } })}
+                style={{ width:"100%",padding:13,fontSize:14 }}
+              >+ เพิ่มโครงการใหม่</button>
+              <div style={{ marginTop:8,fontSize:11,color:"#888" }}>
+                ข้อมูลโครงการ (ชื่อ, ที่อยู่, เจ้าของ, เบอร์โทร, เลขผู้เสียภาษี) จะถูกดึงไปแสดงในใบ Invoice/Receipt
               </div>
             </div>
 
@@ -1805,23 +1874,38 @@ export default function App() {
                   {projects.map(p=>{
                     const entriesCount = entries.filter(e=>e.project===p).length;
                     const instCount = installments.filter(i=>i.project===p).length;
+                    const info = projectInfos[p] || { ...emptyProjectInfo, name:p };
+                    const hasDetails = !!(info.address||info.ownerName||info.ownerPhone||info.ownerTaxId);
                     return (
                       <div key={p} style={{ padding:"12px 14px",background:"#f8f9ff",borderRadius:10,border:"1px solid #eef0f8" }}>
-                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,marginBottom:8 }}>
-                          <div style={{ flex:1,minWidth:0 }}>
-                            <div style={{ fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis" }}>📁 {p}</div>
-                            <div style={{ fontSize:12,color:"#888",marginTop:4 }}>
-                              {entriesCount} รายการบัญชี · {instCount} งวดงาน
-                            </div>
+                        <div style={{ marginBottom:8 }}>
+                          <div style={{ fontWeight:700,fontSize:14 }}>📁 {p}</div>
+                          <div style={{ fontSize:12,color:"#888",marginTop:4 }}>
+                            {entriesCount} รายการบัญชี · {instCount} งวดงาน
                           </div>
+                          {hasDetails?(
+                            <div style={{ fontSize:11,color:"#666",marginTop:6,lineHeight:1.5,paddingTop:6,borderTop:"1px dashed #e0e4f0" }}>
+                              {info.ownerName&&<div>👤 {info.ownerName}</div>}
+                              {info.address&&<div>📍 {info.address}</div>}
+                              {info.ownerPhone&&<div>📞 {info.ownerPhone}</div>}
+                              {info.ownerTaxId&&<div>🏢 เลขผู้เสียภาษี: {info.ownerTaxId}</div>}
+                            </div>
+                          ):(
+                            <div style={{ fontSize:11,color:"#bf360c",marginTop:6,fontStyle:"italic" }}>⚠️ ยังไม่มีข้อมูลลูกค้า (กดแก้ไขเพื่อเติมข้อมูล)</div>
+                          )}
                         </div>
-                        <button
-                          className="btn btn-red"
-                          onClick={()=>{ setDeleteProj(p); setDeleteProjConfirm(""); }}
-                          style={{ width:"100%",padding:9,fontSize:13 }}
-                        >
-                          🗑️ ลบโครงการ
-                        </button>
+                        <div style={{ display:"flex",gap:8 }}>
+                          <button
+                            className="btn btn-outline"
+                            onClick={()=>setEditProj({ mode:"edit", oldName:p, form:{ ...info, name:p } })}
+                            style={{ flex:1,padding:9,fontSize:13 }}
+                          >✏️ แก้ไข</button>
+                          <button
+                            className="btn btn-red"
+                            onClick={()=>{ setDeleteProj(p); setDeleteProjConfirm(""); }}
+                            style={{ flex:1,padding:9,fontSize:13 }}
+                          >🗑️ ลบ</button>
+                        </div>
                       </div>
                     );
                   })}
@@ -2115,27 +2199,70 @@ export default function App() {
         </div>
       )}
 
-      {/* ADD PROJECT MODAL */}
+      {/* ADD PROJECT MODAL (legacy, from project view fallback) */}
       {showProjMgr&&(
         <div className="modal-bg" onClick={()=>setShowProjMgr(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
             <div style={{ fontWeight:800,fontSize:18,marginBottom:6 }}>📁 เพิ่มโครงการใหม่</div>
             <div style={{ fontSize:12,color:"#888",marginBottom:16 }}>
-              สำหรับการลบ ให้ไปที่ <b>ตั้งค่า → Danger Zone → จัดการโครงการ</b>
+              สำหรับการแก้ไข/ลบ ให้ไปที่ <b>ตั้งค่า → Danger Zone → จัดการโครงการ</b>
             </div>
             <div style={{ display:"flex",gap:8,marginBottom:16 }}>
               <input placeholder="ชื่อโครงการใหม่..." value={newProj} onChange={e=>setNewProj(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addProject()} style={{ flex:1 }}/>
               <button className="btn btn-green" onClick={addProject} disabled={saving} style={{ whiteSpace:"nowrap" }}>+ เพิ่ม</button>
             </div>
-            {projects.length>0&&(
-              <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:240,overflowY:"auto",marginBottom:8 }}>
-                {projects.map(p=>(
-                  <div key={p} style={{ padding:"10px 14px",background:"#f8f9ff",borderRadius:10,fontSize:13 }}>{p}</div>
-                ))}
-              </div>
-            )}
             <button className="btn btn-ghost" style={{ marginTop:8,width:"100%",padding:13 }} onClick={()=>setShowProjMgr(false)}>ปิด</button>
+          </div>
+        </div>
+      )}
+
+      {/* PROJECT INFO ADD/EDIT MODAL */}
+      {editProj&&(
+        <div className="modal-bg" onClick={()=>{ if(!saving) setEditProj(null); }}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+            <div style={{ fontWeight:800,fontSize:18,marginBottom:4 }}>{editProj.mode==="add"?"➕ เพิ่มโครงการ":"✏️ แก้ไขโครงการ"}</div>
+            <div style={{ fontSize:12,color:"#888",marginBottom:16 }}>ข้อมูลนี้จะถูกใช้ในใบ Invoice / Receipt</div>
+            <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+              <div>
+                <label style={{ fontSize:12,color:"#aaa",fontWeight:700,display:"block",marginBottom:6 }}>ชื่อโครงการ *</label>
+                <input type="text" placeholder="เช่น Belle Condo OPT.1" value={editProj.form.name}
+                  onChange={e=>setEditProj(p=>p?{...p,form:{...p.form,name:e.target.value}}:p)}/>
+              </div>
+              <div>
+                <label style={{ fontSize:12,color:"#aaa",fontWeight:700,display:"block",marginBottom:6 }}>ที่อยู่โครงการ</label>
+                <textarea placeholder="ที่อยู่เต็ม..." rows={2} value={editProj.form.address}
+                  onChange={e=>setEditProj(p=>p?{...p,form:{...p.form,address:e.target.value}}:p)}
+                  style={{ resize:"vertical",minHeight:60,lineHeight:1.5 }}/>
+              </div>
+              <div>
+                <label style={{ fontSize:12,color:"#aaa",fontWeight:700,display:"block",marginBottom:6 }}>ชื่อเจ้าของ / ลูกค้า</label>
+                <input type="text" placeholder="ชื่อ-นามสกุล หรือ ชื่อบริษัท" value={editProj.form.ownerName}
+                  onChange={e=>setEditProj(p=>p?{...p,form:{...p.form,ownerName:e.target.value}}:p)}/>
+              </div>
+              <div>
+                <label style={{ fontSize:12,color:"#aaa",fontWeight:700,display:"block",marginBottom:6 }}>เบอร์โทรติดต่อ</label>
+                <input type="tel" inputMode="tel" placeholder="08X-XXX-XXXX" value={editProj.form.ownerPhone}
+                  onChange={e=>setEditProj(p=>p?{...p,form:{...p.form,ownerPhone:e.target.value}}:p)}/>
+              </div>
+              <div>
+                <label style={{ fontSize:12,color:"#aaa",fontWeight:700,display:"block",marginBottom:6 }}>เลขทะเบียนนิติบุคคล / เลขผู้เสียภาษี</label>
+                <input type="text" inputMode="numeric" placeholder="13 หลัก" value={editProj.form.ownerTaxId}
+                  onChange={e=>setEditProj(p=>p?{...p,form:{...p.form,ownerTaxId:e.target.value.replace(/\D/g,"").slice(0,13)}}:p)}/>
+              </div>
+              {editProj.mode==="edit"&&editProj.form.name.trim()!==editProj.oldName&&(
+                <div style={{ background:"#fff3e0",border:"1px solid #ffb74d",borderRadius:8,padding:"8px 12px",fontSize:12,color:"#bf360c" }}>
+                  ⚠️ คุณกำลังเปลี่ยนชื่อโครงการ "{editProj.oldName}" → "{editProj.form.name.trim()}" — รายการบัญชีและงวดที่เกี่ยวข้องจะถูก rename อัตโนมัติ
+                </div>
+              )}
+              <div style={{ display:"flex",gap:10,marginTop:4 }}>
+                <button className="btn btn-ghost" onClick={()=>setEditProj(null)} disabled={saving} style={{ flex:1,padding:13 }}>ยกเลิก</button>
+                <button className="btn btn-primary" onClick={saveProjectInfo} disabled={saving||!editProj.form.name.trim()} style={{ flex:2,padding:13 }}>
+                  {saving?"กำลังบันทึก...":editProj.mode==="add"?"บันทึกโครงการ":"บันทึกการแก้ไข"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
