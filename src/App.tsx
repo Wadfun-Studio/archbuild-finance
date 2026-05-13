@@ -539,6 +539,13 @@ export default function App() {
   const [instForm, setInstForm] = useState<InstForm>({ kind:"receivable", scope:"design", workCategory: WORK_CATS_BY_SCOPE.design[0], project:"", name:"งวดที่ 1", description:"", amount:"", dueDate:"" });
   const [instTab, setInstTab] = useState<InstKind>("receivable");
   const [ohTab, setOhTab] = useState<OverheadKind>("project");
+  // Overhead form state
+  const [showOhForm, setShowOhForm] = useState(false);
+  const [editOhId, setEditOhId] = useState<number|null>(null);
+  const [deleteOhId, setDeleteOhId] = useState<number|null>(null);
+  const [ohForm, setOhForm] = useState<{ kind:OverheadKind; date:string; category:string; description:string; amount:string; project:string; employeeId:string; hasVat:boolean; hasWht:boolean; whtRate:number }>({
+    kind:"project", date:today(), category:PROJECT_OH_CATS[0], description:"", amount:"", project:"", employeeId:"", hasVat:false, hasWht:false, whtRate:3
+  });
   const [activeScope, setActiveScope] = useState<InstScope>("design");
   const [deleteInstId, setDeleteInstId] = useState<number|null>(null);
   // PIN state — only for the dashboard view (auto-clears on tab change)
@@ -736,6 +743,60 @@ export default function App() {
   function saveRecurringTemplates(list: RecurringTemplate[]) {
     setRecurringTemplates(list);
     localStorage.setItem("wf_recurring_templates", JSON.stringify(list));
+  }
+
+  function openAddOverhead(kind: OverheadKind) {
+    setEditOhId(null);
+    setOhForm({ kind, date: today(), category: kind==="project"?PROJECT_OH_CATS[0]:STAFF_OH_CATS[0], description:"", amount:"", project: kind==="project"?(projects[0]||""):"", employeeId:"", hasVat:false, hasWht:false, whtRate:3 });
+    setShowOhForm(true);
+  }
+  function openEditOverhead(o: OverheadEntry) {
+    setEditOhId(o.id);
+    setOhForm({ kind: o.kind, date: o.date, category: o.category, description: o.description, amount: String(o.amount), project: o.project||"", employeeId: o.employeeId?String(o.employeeId):"", hasVat: !!o.hasVat, hasWht: !!o.hasWht, whtRate: o.whtRate ?? 3 });
+    setShowOhForm(true);
+  }
+  function saveOverheadForm() {
+    const amt = +ohForm.amount;
+    if (!ohForm.category || !amt || amt<=0) { showToast("กรอกหมวด + จำนวนเงิน","err"); return; }
+    if (ohForm.kind==="project" && !ohForm.project) { showToast("เลือกโครงการ","err"); return; }
+    const vat = ohForm.hasVat ? amt * VAT_RATE : 0;
+    const wht = ohForm.hasWht ? amt * (ohForm.whtRate/100) : 0;
+    if (editOhId) {
+      const prev = overheads.find(o=>o.id===editOhId);
+      const updated: OverheadEntry = {
+        ...prev!,
+        kind: ohForm.kind, date: ohForm.date, category: ohForm.category,
+        description: ohForm.description.trim(), amount: amt,
+        project: ohForm.kind==="project" ? ohForm.project : undefined,
+        employeeId: ohForm.employeeId ? +ohForm.employeeId : undefined,
+        hasVat: ohForm.hasVat, hasWht: ohForm.hasWht, whtRate: ohForm.whtRate,
+        vat, wht,
+      };
+      saveOverheads(overheads.map(o=>o.id===editOhId?updated:o));
+      showToast("แก้ไขรายการสำเร็จ");
+    } else {
+      const newOh: OverheadEntry = {
+        id: Date.now(),
+        kind: ohForm.kind, date: ohForm.date, category: ohForm.category,
+        description: ohForm.description.trim(), amount: amt,
+        project: ohForm.kind==="project" ? ohForm.project : undefined,
+        employeeId: ohForm.employeeId ? +ohForm.employeeId : undefined,
+        status: "pending",
+        hasVat: ohForm.hasVat, hasWht: ohForm.hasWht, whtRate: ohForm.whtRate,
+        vat, wht,
+      };
+      saveOverheads([...overheads, newOh]);
+      showToast("เพิ่ม overhead สำเร็จ");
+    }
+    setShowOhForm(false);
+  }
+  function toggleOverheadStatus(o: OverheadEntry) {
+    const nextStatus: OverheadStatus = o.status==="pending" ? "paid" : "pending";
+    saveOverheads(overheads.map(x=>x.id===o.id?{ ...x, status:nextStatus, paidDate: nextStatus==="paid"?today():undefined }:x));
+  }
+  function deleteOverhead(id: number) {
+    saveOverheads(overheads.filter(o=>o.id!==id));
+    showToast("ลบรายการ overhead แล้ว","err");
   }
 
   function addInstallment() {
@@ -2084,17 +2145,56 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Placeholder content — CRUD comes in next batch */}
-              <div className="card" style={{ padding:24,textAlign:"center",color:"#94a3b8" }}>
-                <div style={{ fontSize:32,marginBottom:8 }}>🚧</div>
-                <div style={{ fontSize:14,fontWeight:600,color:"#475569",marginBottom:6 }}>
-                  {ohTab==="project"?"Project Overhead":"Staff Overhead"} — กำลังทยอยเพิ่ม
+              {/* Add button */}
+              <button className="btn btn-primary" style={{ width:"100%",padding:14,fontSize:15 }} onClick={()=>openAddOverhead(ohTab)}>
+                + เพิ่ม{ohTab==="project"?"Project Overhead":"Staff Overhead"}
+              </button>
+
+              {/* Entries list */}
+              {scopedList.length===0 ? (
+                <div className="card" style={{ padding:32,textAlign:"center",color:"#94a3b8" }}>
+                  <div style={{ fontSize:32,marginBottom:8 }}>📭</div>
+                  <div style={{ fontSize:13 }}>ยังไม่มีรายการ — กดปุ่มด้านบนเพื่อเพิ่ม</div>
                 </div>
-                <div style={{ fontSize:12,lineHeight:1.6 }}>
-                  Batch 1 (โครงสร้างข้อมูล) เสร็จแล้ว ✅<br/>
-                  ปุ่ม + เพิ่ม / รายการ / ฟอร์ม จะมาใน Batch 3-7
-                </div>
-              </div>
+              ) : (
+                scopedList.map(o=>{
+                  const isPaid = o.status==="paid";
+                  return (
+                    <div key={o.id} className="card" style={{ padding:14,borderLeft:`4px solid ${isPaid?"#15803d":"#b45309"}` }}>
+                      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6 }}>
+                        <div style={{ flex:1,minWidth:0 }}>
+                          <div style={{ display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:4 }}>
+                            <span className="tag">{o.category}</span>
+                            <span className={`badge badge-${isPaid?"received":"pending"}`}>{isPaid?"✅ จ่ายแล้ว":"⏳ ยังไม่จ่าย"}</span>
+                          </div>
+                          {o.description&&<div style={{ fontSize:13,fontWeight:600,color:"#0f172a",marginBottom:3 }}>{o.description}</div>}
+                          <div style={{ fontSize:11,color:"#64748b",display:"flex",flexWrap:"wrap",gap:8 }}>
+                            <span>📅 {fmtDate(o.date)}</span>
+                            {o.project&&<span>📁 {o.project}</span>}
+                            {isPaid&&o.paidDate&&<span style={{ color:"#15803d" }}>💸 จ่าย {fmtDate(o.paidDate)}</span>}
+                          </div>
+                        </div>
+                        <div className="num" style={{ fontSize:18,fontWeight:800,color:"#dc2626",whiteSpace:"nowrap" }}>-฿{fmt(o.amount)}</div>
+                      </div>
+                      {(o.hasVat||o.hasWht)&&(
+                        <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:8 }}>
+                          {o.hasVat&&<span style={{ fontSize:11,fontWeight:700,color:"#15803d",background:"#dcfce7",padding:"3px 9px",borderRadius:6 }}>VAT 7% +฿{fmt(o.vat||0)}</span>}
+                          {o.hasWht&&<span style={{ fontSize:11,fontWeight:700,color:"#b91c1c",background:"#fee2e2",padding:"3px 9px",borderRadius:6 }}>หัก {o.whtRate??3}% -฿{fmt(o.wht||0)}</span>}
+                        </div>
+                      )}
+                      <div style={{ display:"flex",gap:6 }}>
+                        {!isPaid ? (
+                          <button className="btn btn-green" style={{ flex:2,fontSize:12,padding:8 }} onClick={()=>toggleOverheadStatus(o)}>✅ จ่ายแล้ว</button>
+                        ) : (
+                          <button className="btn btn-ghost" style={{ flex:2,fontSize:12,padding:8 }} onClick={()=>toggleOverheadStatus(o)}>↩️ ยกเลิก</button>
+                        )}
+                        <button className="btn btn-outline" style={{ flex:1,fontSize:12,padding:8 }} onClick={()=>openEditOverhead(o)}>✏️ แก้</button>
+                        <button className="btn btn-red" style={{ flex:1,fontSize:12,padding:8 }} onClick={()=>setDeleteOhId(o.id)}>🗑️ ลบ</button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           );
         })()}
@@ -2631,6 +2731,111 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* OVERHEAD FORM MODAL */}
+      {showOhForm&&(()=>{
+        const cats = ohForm.kind==="project"?PROJECT_OH_CATS:STAFF_OH_CATS;
+        const amt = +ohForm.amount || 0;
+        return (
+          <div className="modal-bg" onClick={()=>setShowOhForm(false)}>
+            <div className="modal" onClick={e=>e.stopPropagation()}>
+              <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+              <div style={{ fontWeight:800,fontSize:18,marginBottom:6 }}>
+                {editOhId?"✏️ แก้ไข":"➕ บันทึก"} {ohForm.kind==="project"?"Project Overhead":"Staff Overhead"}
+              </div>
+              <div style={{ fontSize:12,color:"#64748b",marginBottom:18 }}>กรอกข้อมูลรายจ่ายเหมา</div>
+              <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+                <div>
+                  <label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>หมวดงาน</label>
+                  <div style={{ display:"flex",borderRadius:12,overflow:"hidden",border:"1.5px solid #e2e8f0" }}>
+                    {[
+                      {v:"project" as OverheadKind,l:"📊 Project"},
+                      {v:"staff" as OverheadKind,l:"👥 Staff"},
+                    ].map(t=>(
+                      <button key={t.v} onClick={()=>setOhForm(f=>({...f,kind:t.v,category:t.v==="project"?PROJECT_OH_CATS[0]:STAFF_OH_CATS[0]}))} style={{ flex:1,padding:12,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,background:ohForm.kind===t.v?"#1e40af":"transparent",color:ohForm.kind===t.v?"#fff":"#94a3b8" }}>{t.l}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>หมวด</label>
+                  <select value={ohForm.category} onChange={e=>setOhForm(f=>({...f,category:e.target.value}))}>
+                    {cats.map(c=><option key={c}>{c}</option>)}
+                  </select>
+                </div>
+                {ohForm.kind==="project"&&(
+                  <div>
+                    <label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>โครงการ</label>
+                    <select value={ohForm.project} onChange={e=>setOhForm(f=>({...f,project:e.target.value}))}>
+                      <option value="">— เลือกโครงการ —</option>
+                      {projects.map(p=><option key={p}>{p}</option>)}
+                    </select>
+                  </div>
+                )}
+                <div>
+                  <label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>วันที่</label>
+                  <input type="date" value={ohForm.date} onChange={e=>setOhForm(f=>({...f,date:e.target.value}))}/>
+                </div>
+                <div>
+                  <label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>รายละเอียด</label>
+                  <input type="text" placeholder="อธิบายเพิ่มเติม..." value={ohForm.description} onChange={e=>setOhForm(f=>({...f,description:e.target.value}))}/>
+                </div>
+                <div>
+                  <label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>จำนวนเงิน (บาท)</label>
+                  <input type="text" inputMode="decimal" placeholder="0.00" value={formatThousand(ohForm.amount)} onChange={e=>{ const raw=parseThousand(e.target.value); if (/^\d*\.?\d*$/.test(raw)) setOhForm(f=>({...f,amount:raw})); }}/>
+                </div>
+                <div>
+                  <label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:8 }}>ภาษี</label>
+                  <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                    <button type="button" onClick={()=>setOhForm(f=>({...f,hasVat:!f.hasVat}))} style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:ohForm.hasVat?"#dcfce7":"#f8fafc",border:`2px solid ${ohForm.hasVat?"#15803d":"#e2e8f0"}`,borderRadius:12,cursor:"pointer",fontFamily:"inherit",textAlign:"left",width:"100%" }}>
+                      <div style={{ width:24,height:24,borderRadius:6,background:ohForm.hasVat?"#15803d":"#fff",border:`2px solid ${ohForm.hasVat?"#15803d":"#cbd5e1"}`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:800 }}>{ohForm.hasVat?"✓":""}</div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:14,fontWeight:700,color:ohForm.hasVat?"#15803d":"#475569" }}>VAT 7% (Input VAT)</div>
+                        {ohForm.hasVat&&amt>0&&<div style={{ fontSize:12,color:"#15803d",fontWeight:600,marginTop:2 }}>= ฿{fmt(amt*VAT_RATE)}</div>}
+                      </div>
+                    </button>
+                    <button type="button" onClick={()=>setOhForm(f=>({...f,hasWht:!f.hasWht}))} style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:ohForm.hasWht?"#fee2e2":"#f8fafc",border:`2px solid ${ohForm.hasWht?"#dc2626":"#e2e8f0"}`,borderRadius:12,cursor:"pointer",fontFamily:"inherit",textAlign:"left",width:"100%" }}>
+                      <div style={{ width:24,height:24,borderRadius:6,background:ohForm.hasWht?"#dc2626":"#fff",border:`2px solid ${ohForm.hasWht?"#dc2626":"#cbd5e1"}`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:800 }}>{ohForm.hasWht?"✓":""}</div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:14,fontWeight:700,color:ohForm.hasWht?"#dc2626":"#475569" }}>หัก ณ ที่จ่าย {ohForm.hasWht?ohForm.whtRate:""}{ohForm.hasWht?"%":""}</div>
+                        {ohForm.hasWht&&amt>0&&<div style={{ fontSize:12,color:"#dc2626",fontWeight:600,marginTop:2 }}>= ฿{fmt(amt*(ohForm.whtRate/100))}</div>}
+                      </div>
+                      {ohForm.hasWht&&(
+                        <input type="number" min="0" max="50" step="0.5" value={ohForm.whtRate} onChange={e=>setOhForm(f=>({...f,whtRate:+e.target.value}))} onClick={e=>e.stopPropagation()} style={{ width:64,padding:"6px 8px",fontSize:13,textAlign:"center" }}/>
+                      )}
+                    </button>
+                  </div>
+                </div>
+                <div style={{ display:"flex",gap:10,marginTop:4 }}>
+                  <button className="btn btn-ghost" onClick={()=>setShowOhForm(false)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
+                  <button className="btn btn-primary" onClick={saveOverheadForm} style={{ flex:2,padding:13 }}>{editOhId?"บันทึกการแก้ไข":"บันทึก"}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* DELETE OVERHEAD CONFIRM */}
+      {deleteOhId!==null&&(()=>{
+        const o = overheads.find(x=>x.id===deleteOhId);
+        if (!o) return null;
+        return (
+          <div className="modal-bg" onClick={()=>setDeleteOhId(null)}>
+            <div className="modal" onClick={e=>e.stopPropagation()}>
+              <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+              <div style={{ fontSize:36,textAlign:"center",marginBottom:10 }}>🗑️</div>
+              <div style={{ fontWeight:800,fontSize:17,textAlign:"center",marginBottom:8 }}>ยืนยันการลบ overhead</div>
+              <div style={{ color:"#64748b",textAlign:"center",marginBottom:14,fontSize:13 }}>
+                <b>{o.category}</b><br/>{o.kind==="project"?`📁 ${o.project} · `:""}฿{fmt(o.amount)}
+              </div>
+              <div style={{ display:"flex",gap:10 }}>
+                <button className="btn btn-ghost" onClick={()=>setDeleteOhId(null)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
+                <button className="btn btn-red" onClick={()=>{ deleteOverhead(o.id); setDeleteOhId(null); }} style={{ flex:1,padding:13,fontSize:14 }}>ลบรายการ</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* DELETE INSTALLMENT CONFIRM */}
       {deleteInstId!==null&&(()=>{
