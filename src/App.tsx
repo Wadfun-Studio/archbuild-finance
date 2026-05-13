@@ -436,7 +436,7 @@ export default function App() {
   const [instTab, setInstTab] = useState<InstKind>("receivable");
   const [activeScope, setActiveScope] = useState<InstScope>("design");
   const [deleteInstId, setDeleteInstId] = useState<number|null>(null);
-  const [authenticated, setAuthenticated] = useState<boolean>(()=>sessionStorage.getItem("wf_authed")==="1");
+  const [authenticated, setAuthenticated] = useState<boolean>(false);
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState<string|null>(null);
   const [showChangePin, setShowChangePin] = useState(false);
@@ -551,6 +551,15 @@ export default function App() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Auto-logout when navigating away from the dashboard — PIN required on every entry
+  useEffect(() => {
+    if (view !== "dashboard" && authenticated) {
+      setAuthenticated(false);
+      setPinInput("");
+      setPinError(null);
+    }
+  }, [view, authenticated]);
 
   // Push notification setup
   useEffect(() => {
@@ -961,7 +970,7 @@ export default function App() {
             <form onSubmit={async (e)=>{
               e.preventDefault();
               const ok = await verifyPin(pinInput);
-              if (ok) { sessionStorage.setItem("wf_authed","1"); setAuthenticated(true); setPinInput(""); setPinError(null); }
+              if (ok) { setAuthenticated(true); setPinInput(""); setPinError(null); }
               else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
             }}>
               <input
@@ -1694,16 +1703,8 @@ export default function App() {
                   style={{ fontSize:13,padding:"8px 14px" }}
                 >เปลี่ยน PIN</button>
               </div>
-              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0" }}>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:14,fontWeight:600 }}>ล็อก / ออกจากระบบ</div>
-                  <div style={{ fontSize:11,color:"#888",marginTop:2 }}>ต้องกรอก PIN ใหม่ในครั้งถัดไป</div>
-                </div>
-                <button
-                  className="btn btn-ghost"
-                  onClick={()=>{ sessionStorage.removeItem("wf_authed"); setAuthenticated(false); }}
-                  style={{ fontSize:13,padding:"8px 14px" }}
-                >🚪 ออก</button>
+              <div style={{ padding:"12px 0",fontSize:11,color:"#888",lineHeight:1.5 }}>
+                🔒 PIN จะถูกล็อกอัตโนมัติทุกครั้งที่ออกจากแท็บ "ภาพรวม" — เข้าครั้งถัดไปต้องกรอกใหม่
               </div>
             </div>
 
