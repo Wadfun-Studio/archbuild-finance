@@ -333,16 +333,40 @@ async function generateDocPDF(kind: "invoice"|"receipt", opts: {
   pdf.save(`${kind === "invoice" ? "Invoice" : "Receipt"}_${opts.docNo.replace("/","-")}.pdf`);
 }
 
+// JSONP-based API call — bypasses Google Apps Script's broken CORS for cross-origin fetch.
+// Script tags don't have CORS checks; the backend wraps the response in a callback function.
+let _jsonpSeq = 0;
+// Returns the raw object from Apps Script — typed as any to match previous fetch().json() behavior
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function apiCall(action: string, params: Record<string,string> = {}, body?: object): Promise<any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return new Promise<any>((resolve, reject) => {
+    _jsonpSeq++;
+    const cb = `__wf_jsonp_${_jsonpSeq}_${Date.now()}`;
+    const w = window as unknown as Record<string, unknown>;
+    const script = document.createElement("script");
+    const cleanup = () => {
+      delete w[cb];
+      if (script.parentNode) script.parentNode.removeChild(script);
+    };
+    const timeoutId = window.setTimeout(() => { cleanup(); reject(new Error("JSONP timeout (30s)")); }, 30000);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    w[cb] = (data: any) => { window.clearTimeout(timeoutId); cleanup(); resolve(data); };
+    const url = new URL(getApiUrl());
+    url.searchParams.set("action", action);
+    url.searchParams.set("callback", cb);
+    Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, v));
+    if (body) url.searchParams.set("body", JSON.stringify(body));
+    script.src = url.toString();
+    script.onerror = () => { window.clearTimeout(timeoutId); cleanup(); reject(new Error("JSONP load error — Apps Script unreachable or returned non-JS response")); };
+    document.head.appendChild(script);
+  });
+}
 async function apiGet(action: string, params: Record<string,string> = {}) {
-  const url = new URL(getApiUrl());
-  url.searchParams.set("action", action);
-  Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, v));
-  return (await fetch(url.toString())).json();
+  return apiCall(action, params);
 }
 async function apiPost(action: string, body: object = {}) {
-  const url = new URL(getApiUrl());
-  url.searchParams.set("action", action);
-  return (await fetch(url.toString(), { method: "POST", body: JSON.stringify(body) })).json();
+  return apiCall(action, {}, body);
 }
 
 type VatType = "output"|"input";

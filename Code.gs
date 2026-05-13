@@ -37,6 +37,21 @@ function _json(payload) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+/**
+ * Respond as JSONP (callback wrapper) or plain JSON depending on whether
+ * the request includes a `callback` parameter. JSONP is used by the
+ * frontend to bypass Google Apps Script's cross-origin restrictions on
+ * fetch() — script tags don't have CORS checks.
+ */
+function _respond(payload, callback) {
+  if (callback && /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(callback)) {
+    return ContentService.createTextOutput(callback + "(" + JSON.stringify(payload) + ")")
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
+  }
+  return ContentService.createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
 function _rowToEntry(r) {
   return {
     id: r[0],
@@ -265,14 +280,23 @@ function _route(action, params, body) {
 }
 
 function doGet(e) {
-  const action = (e.parameter && e.parameter.action) || "";
-  return _json(_route(action, e.parameter || {}, null));
+  const p = (e && e.parameter) || {};
+  const action = p.action || "";
+  // Support body delivered via `body` URL param (for JSONP — script tags can only do GET)
+  let body = null;
+  if (p.body) {
+    try { body = JSON.parse(p.body); } catch (err) {
+      return _respond({ ok: false, error: "invalid JSON in body param" }, p.callback);
+    }
+  }
+  return _respond(_route(action, p, body), p.callback);
 }
 
 function doPost(e) {
-  const action = (e.parameter && e.parameter.action) || "";
+  const p = (e && e.parameter) || {};
+  const action = p.action || "";
   let body = null;
   try { body = e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : null; }
-  catch (err) { return _json({ ok: false, error: "invalid JSON" }); }
-  return _json(_route(action, e.parameter || {}, body));
+  catch (err) { return _respond({ ok: false, error: "invalid JSON" }, p.callback); }
+  return _respond(_route(action, p, body), p.callback);
 }
