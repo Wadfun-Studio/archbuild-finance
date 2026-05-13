@@ -970,10 +970,22 @@ export default function App() {
   );
 
   if (error) return (
-    <div style={{ display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",fontFamily:"'Sarabun',sans-serif",gap:16,padding:24 }}>
+    <div style={{ display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"100vh",fontFamily:"'Sarabun',sans-serif",gap:14,padding:24 }}>
       <div style={{ fontSize:40 }}>⚠️</div>
-      <div style={{ color:"#c62828",fontWeight:700,fontSize:16 }}>{error}</div>
-      <button onClick={loadAll} style={{ background:"#1565c0",color:"#fff",border:"none",borderRadius:10,padding:"12px 24px",fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:"pointer" }}>ลองใหม่</button>
+      <div style={{ color:"#c62828",fontWeight:700,fontSize:16,textAlign:"center" }}>{error}</div>
+      <div style={{ fontSize:11,color:"#888",fontFamily:"monospace",background:"#f5f5f5",padding:"6px 10px",borderRadius:6,maxWidth:480,wordBreak:"break-all",textAlign:"center" }}>API: {getApiUrl()}</div>
+      <div style={{ display:"flex",gap:10,flexWrap:"wrap",justifyContent:"center" }}>
+        <button onClick={loadAll} style={{ background:"#1565c0",color:"#fff",border:"none",borderRadius:10,padding:"12px 24px",fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:"pointer" }}>ลองใหม่</button>
+        {localStorage.getItem(API_URL_KEY)&&(
+          <button
+            onClick={()=>{ localStorage.removeItem(API_URL_KEY); setApiUrlInput(DEFAULT_API); setError(null); loadAll(); }}
+            style={{ background:"#fff",color:"#c62828",border:"2px solid #c62828",borderRadius:10,padding:"10px 22px",fontFamily:"inherit",fontSize:14,fontWeight:600,cursor:"pointer" }}
+          >🔄 รีเซ็ต Apps Script URL เป็นค่าเริ่มต้น</button>
+        )}
+      </div>
+      <div style={{ fontSize:11,color:"#aaa",marginTop:6,textAlign:"center",maxWidth:480 }}>
+        ถ้าคุณเพิ่งใส่ URL ใหม่และทำให้แอปเข้าไม่ได้ — กดปุ่ม "รีเซ็ต" ด้านบน
+      </div>
     </div>
   );
 
@@ -1834,18 +1846,24 @@ export default function App() {
                     className="btn btn-primary"
                     onClick={async()=>{
                       const v = apiUrlInput.trim();
-                      if (!v) { localStorage.removeItem(API_URL_KEY); showToast("กลับไปใช้ URL เริ่มต้น"); setApiUrlInput(DEFAULT_API); return; }
+                      if (!v) { localStorage.removeItem(API_URL_KEY); showToast("กลับไปใช้ URL เริ่มต้น"); setApiUrlInput(DEFAULT_API); loadAll(); return; }
                       try { new URL(v); } catch { showToast("URL ไม่ถูกต้อง","err"); return; }
-                      localStorage.setItem(API_URL_KEY, v);
-                      // Verify by calling getProjects
+                      // Test BEFORE saving — prevent lockout on bad URLs
                       setSaving(true);
                       try {
-                        const res = await apiGet("getProjects");
-                        if (res && res.ok) { showToast("บันทึก URL ใหม่สำเร็จ ✅"); loadAll(); }
-                        else showToast("URL ตอบกลับผิดพลาด: "+(res&&res.error?res.error:"unknown"),"err");
+                        const testUrl = new URL(v);
+                        testUrl.searchParams.set("action","getProjects");
+                        const res = await (await fetch(testUrl.toString())).json();
+                        if (res && res.ok) {
+                          localStorage.setItem(API_URL_KEY, v);
+                          showToast("บันทึก URL ใหม่สำเร็จ ✅");
+                          loadAll();
+                        } else {
+                          showToast("URL ตอบกลับผิดพลาด ("+(res&&res.error?res.error:"unknown")+") — ยังไม่บันทึก","err");
+                        }
                       } catch (e) {
                         console.error("[apiUrl test] error:", e);
-                        showToast("ติดต่อ URL ไม่สำเร็จ","err");
+                        showToast("ติดต่อ URL ไม่สำเร็จ — ยังไม่บันทึก","err");
                       }
                       setSaving(false);
                     }}
