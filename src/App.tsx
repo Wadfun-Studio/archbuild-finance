@@ -1818,7 +1818,7 @@ export default function App() {
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:"1px solid #f0f0f0",gap:10 }}>
                 <div style={{ flex:1,minWidth:0 }}>
                   <div style={{ fontSize:14,fontWeight:600 }}>PIN เข้าใช้งาน</div>
-                  <div style={{ fontSize:11,color:"#888",marginTop:2 }}>เปลี่ยน PIN ต้องยืนยันผ่านอีเมล {PIN_NOTIFY_EMAIL}</div>
+                  <div style={{ fontSize:11,color:"#888",marginTop:2 }}>กรอก PIN ปัจจุบัน + ตั้งใหม่ — มีผลทันที</div>
                 </div>
                 <button
                   className="btn btn-outline"
@@ -2375,14 +2375,14 @@ export default function App() {
         </div>
       )}
 
-      {/* CHANGE PIN MODAL */}
+      {/* CHANGE PIN MODAL — simple 2-step (no email confirmation) */}
       {showChangePin&&(
         <div className="modal-bg" onClick={()=>setShowChangePin(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
             <div style={{ fontSize:32,textAlign:"center",marginBottom:6 }}>🔒</div>
             <div style={{ fontWeight:800,fontSize:18,textAlign:"center",marginBottom:6 }}>เปลี่ยน PIN เข้าใช้งาน</div>
-            <div style={{ fontSize:12,color:"#888",textAlign:"center",marginBottom:18 }}>ขั้นตอนที่ {pinChange.step==="old"?1:pinChange.step==="new"?2:3} / 3</div>
+            <div style={{ fontSize:12,color:"#888",textAlign:"center",marginBottom:18 }}>ขั้นตอนที่ {pinChange.step==="old"?1:2} / 2</div>
 
             {pinChange.step==="old"&&(
               <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
@@ -2411,73 +2411,18 @@ export default function App() {
                 <input type="password" inputMode="numeric" maxLength={6} placeholder="• • • •" value={pinChange.confirmPin}
                   onChange={e=>setPinChange(p=>({...p,confirmPin:e.target.value.replace(/\D/g,"")}))}
                   style={{ padding:"14px 16px",fontSize:20,letterSpacing:"0.3em",textAlign:"center" }}/>
-                <div style={{ fontSize:11,color:"#777",lineHeight:1.5,background:"#f8f9ff",padding:"8px 12px",borderRadius:8 }}>
-                  ระบบจะส่งโค้ดยืนยัน 6 หลักไปที่ <b>{PIN_NOTIFY_EMAIL}</b> ก่อนเปลี่ยน PIN
+                <div style={{ fontSize:11,color:"#bf360c",lineHeight:1.5,background:"#fff3e0",padding:"8px 12px",borderRadius:8,border:"1px solid #ffcc80" }}>
+                  ⚠️ PIN ใหม่จะมีผลทันทีที่กด "บันทึก PIN ใหม่"
                 </div>
                 <div style={{ display:"flex",gap:10,marginTop:6 }}>
                   <button className="btn btn-ghost" onClick={()=>setPinChange(p=>({...p,step:"old"}))} style={{ flex:1,padding:13 }}>← ย้อน</button>
-                  <button className="btn btn-primary" disabled={pinChange.newPin.length<4||pinChange.newPin!==pinChange.confirmPin||saving} onClick={async()=>{
+                  <button className="btn btn-primary" disabled={pinChange.newPin.length<4||pinChange.newPin!==pinChange.confirmPin} onClick={async()=>{
                     if (pinChange.newPin.length<4) { showToast("PIN ใหม่อย่างน้อย 4 หลัก","err"); return; }
                     if (pinChange.newPin!==pinChange.confirmPin) { showToast("PIN ไม่ตรงกัน","err"); return; }
-                    const code = genCode6();
-                    const pendingHash = await sha256Hex(pinChange.newPin);
-                    const expires = Date.now() + 5*60*1000;
-                    setSaving(true);
-                    setPinChange(p=>({...p,lastError:""}));
-                    try {
-                      const res = await apiPost("notifyPinChange", { code, email: PIN_NOTIFY_EMAIL, ts: new Date().toISOString() });
-                      console.log("[notifyPinChange] response:", res);
-                      if (res && res.ok) {
-                        setPinChange(p=>({...p,step:"verify",code,pendingHash,codeSent:true,codeExpires:expires,codeInput:"",lastError:""}));
-                        showToast("ส่งโค้ดยืนยันไปทางอีเมลแล้ว");
-                      } else {
-                        const errMsg = res && res.error ? String(res.error) : "Apps Script ไม่ตอบกลับตามคาด";
-                        setPinChange(p=>({...p,lastError:errMsg}));
-                      }
-                    } catch (e) {
-                      console.error("[notifyPinChange] error:", e);
-                      setPinChange(p=>({...p,lastError:"เรียก Apps Script ไม่สำเร็จ (network/CORS)"}));
-                    }
-                    setSaving(false);
-                  }} style={{ flex:2,padding:13 }}>{saving?"กำลังส่ง...":"ส่งโค้ดยืนยัน"}</button>
-                </div>
-                {pinChange.lastError&&(
-                  <div style={{ background:"#ffebee",border:"1.5px solid #ef9a9a",borderRadius:10,padding:"10px 12px",fontSize:12,color:"#c62828",lineHeight:1.5 }}>
-                    ⚠️ <b>ส่งอีเมลไม่สำเร็จ</b>: {pinChange.lastError}
-                    <div style={{ marginTop:6,paddingTop:6,borderTop:"1px dashed #ef9a9a",color:"#666",fontSize:11 }}>
-                      <b>วิธีแก้:</b><br/>
-                      1. เปิด Google Sheet → Extensions → Apps Script<br/>
-                      2. Copy <code style={{ background:"#fff",padding:"1px 4px",borderRadius:3 }}>Code.gs</code> ล่าสุดจาก repo มาวางทับ<br/>
-                      3. คลิกเลือก function <code style={{ background:"#fff",padding:"1px 4px",borderRadius:3 }}>notifyPinChange</code> ในเมนู → กด ▶ Run<br/>
-                      4. ถ้ามี popup ขอสิทธิ์ Gmail → กด Allow<br/>
-                      5. Deploy → Manage deployments → ดินสอแก้ → Version: New version → Deploy
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {pinChange.step==="verify"&&(
-              <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-                <div style={{ fontSize:13,color:"#666",textAlign:"center",lineHeight:1.6 }}>
-                  ส่งโค้ดยืนยันไปที่<br/><b>{PIN_NOTIFY_EMAIL}</b>
-                </div>
-                <label style={{ fontSize:13,fontWeight:600,color:"#666" }}>กรอกโค้ด 6 หลักจากอีเมล</label>
-                <input type="text" inputMode="numeric" autoFocus maxLength={6} placeholder="••••••" value={pinChange.codeInput}
-                  onChange={e=>setPinChange(p=>({...p,codeInput:e.target.value.replace(/\D/g,"")}))}
-                  style={{ padding:"14px 16px",fontSize:22,letterSpacing:"0.4em",textAlign:"center" }}/>
-                <div style={{ fontSize:11,color:"#888",textAlign:"center" }}>
-                  โค้ดจะหมดอายุภายใน 5 นาที — {(()=>{ const remain = Math.max(0, Math.ceil((pinChange.codeExpires - Date.now())/1000)); return `${Math.floor(remain/60)}:${String(remain%60).padStart(2,"0")}`; })()}
-                </div>
-                <div style={{ display:"flex",gap:10,marginTop:6 }}>
-                  <button className="btn btn-ghost" onClick={()=>setPinChange(p=>({...p,step:"new"}))} style={{ flex:1,padding:13 }}>← ย้อน</button>
-                  <button className="btn btn-primary" disabled={pinChange.codeInput.length<6} onClick={async()=>{
-                    if (Date.now() > pinChange.codeExpires) { showToast("โค้ดหมดอายุ — ส่งใหม่อีกครั้ง","err"); return; }
-                    if (pinChange.codeInput !== pinChange.code) { showToast("โค้ดไม่ถูกต้อง","err"); return; }
-                    localStorage.setItem(PIN_HASH_KEY, pinChange.pendingHash);
+                    await setPinHash(pinChange.newPin);
                     setShowChangePin(false);
                     showToast("เปลี่ยน PIN สำเร็จ ✅");
-                  }} style={{ flex:2,padding:13 }}>ยืนยันเปลี่ยน PIN</button>
+                  }} style={{ flex:2,padding:13 }}>บันทึก PIN ใหม่</button>
                 </div>
               </div>
             )}
