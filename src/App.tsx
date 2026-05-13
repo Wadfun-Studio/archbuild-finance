@@ -33,41 +33,6 @@ function formatThousand(s: string): string {
 }
 function parseThousand(s: string): string { return s.replace(/,/g, ""); }
 
-// PIN gate (CEO-only access) — initial PIN 1202, hash stored in localStorage
-const DEFAULT_PIN = "1202";
-const PIN_HASH_KEY = "wf_pin_hash";
-const PIN_NOTIFY_EMAIL = "a.athiwat29@gmail.com";
-
-async function sha256Hex(input: string): Promise<string> {
-  const enc = new TextEncoder().encode(input);
-  const buf = await crypto.subtle.digest("SHA-256", enc);
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function getStoredPinHash(): Promise<string> {
-  let hash = localStorage.getItem(PIN_HASH_KEY);
-  if (!hash) {
-    hash = await sha256Hex(DEFAULT_PIN);
-    localStorage.setItem(PIN_HASH_KEY, hash);
-  }
-  return hash;
-}
-
-async function verifyPin(input: string): Promise<boolean> {
-  const stored = await getStoredPinHash();
-  const inputHash = await sha256Hex(input);
-  return inputHash === stored;
-}
-
-async function setPinHash(newPin: string) {
-  const h = await sha256Hex(newPin);
-  localStorage.setItem(PIN_HASH_KEY, h);
-}
-
-function genCode6(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
-
 // Thai number-to-words (baht)
 function bahtText(num: number): string {
   const digits = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
@@ -459,14 +424,7 @@ export default function App() {
   const [instTab, setInstTab] = useState<InstKind>("receivable");
   const [activeScope, setActiveScope] = useState<InstScope>("design");
   const [deleteInstId, setDeleteInstId] = useState<number|null>(null);
-  const [authenticated, setAuthenticated] = useState<boolean>(false);
-  const [pinInput, setPinInput] = useState("");
-  const [pinError, setPinError] = useState<string|null>(null);
-  const [showChangePin, setShowChangePin] = useState(false);
   const [apiUrlInput, setApiUrlInput] = useState<string>(()=>getApiUrl());
-  const [pinChange, setPinChange] = useState<{ step:"old"|"new"|"verify"; oldPin:string; newPin:string; confirmPin:string; code:string; pendingHash:string; codeSent:boolean; codeExpires:number; codeInput:string; lastError:string }>(
-    { step:"old", oldPin:"", newPin:"", confirmPin:"", code:"", pendingHash:"", codeSent:false, codeExpires:0, codeInput:"", lastError:"" }
-  );
   const [showTaxSummary, setShowTaxSummary] = useState(false);
   const [notifGranted, setNotifGranted] = useState(false);
   const [selectedProject, setSelectedProject] = useState<string|null>(null);
@@ -587,14 +545,6 @@ export default function App() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Auto-logout when navigating away from the dashboard — PIN required on every entry
-  useEffect(() => {
-    if (view !== "dashboard" && authenticated) {
-      setAuthenticated(false);
-      setPinInput("");
-      setPinError(null);
-    }
-  }, [view, authenticated]);
 
   // Push notification setup
   useEffect(() => {
@@ -1054,38 +1004,8 @@ export default function App() {
 
       <div style={{ maxWidth:900,margin:"0 auto",padding:"20px 16px 140px" }}>
 
-        {/* DASHBOARD — PIN required for CEO access */}
-        {view==="dashboard"&&!authenticated&&(
-          <div className="card" style={{ padding:"36px 24px",maxWidth:420,margin:"40px auto",textAlign:"center" }}>
-            <img src="/logo-cropped.jpg" alt="Wadfun" style={{ height:40,width:"auto",display:"block",margin:"0 auto 14px" }}/>
-            <div style={{ fontSize:30,marginBottom:6 }}>🔒</div>
-            <div style={{ fontWeight:800,fontSize:17,marginBottom:6 }}>หน้าภาพรวม — เฉพาะ CEO</div>
-            <div style={{ fontSize:12,color:"#888",marginBottom:22 }}>กรอก PIN เพื่อดูข้อมูลสรุปและภาษี</div>
-            <form onSubmit={async (e)=>{
-              e.preventDefault();
-              const ok = await verifyPin(pinInput);
-              if (ok) { setAuthenticated(true); setPinInput(""); setPinError(null); }
-              else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
-            }}>
-              <input
-                type="password"
-                inputMode="numeric"
-                autoFocus
-                maxLength={6}
-                placeholder="• • • •"
-                value={pinInput}
-                onChange={e=>{ setPinInput(e.target.value.replace(/\D/g,"")); setPinError(null); }}
-                style={{ width:"100%",padding:"16px 18px",fontSize:24,letterSpacing:"0.4em",textAlign:"center",border:`2px solid ${pinError?"#c62828":"#e0e4f0"}`,borderRadius:14,outline:"none",fontFamily:"inherit",background:"#f8f9ff" }}
-              />
-              {pinError&&<div style={{ color:"#c62828",fontSize:13,marginTop:10,fontWeight:600 }}>⚠️ {pinError}</div>}
-              <button type="submit" disabled={pinInput.length<4} style={{ width:"100%",marginTop:16,padding:14,fontSize:15,fontWeight:700,fontFamily:"inherit",background:pinInput.length<4?"#bbb":"#1565c0",color:"#fff",border:"none",borderRadius:12,cursor:pinInput.length<4?"not-allowed":"pointer" }}>ดูหน้าภาพรวม</button>
-            </form>
-            <div style={{ marginTop:16,fontSize:11,color:"#aaa" }}>คุณสามารถดูแท็บอื่นได้โดยไม่ต้องใส่ PIN</div>
-          </div>
-        )}
-
         {/* DASHBOARD */}
-        {view==="dashboard"&&authenticated&&(
+        {view==="dashboard"&&(
           <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
             {/* Google Sheet setup notice */}
             {!sheetSetupDismissed&&(
@@ -1820,23 +1740,9 @@ export default function App() {
             </div>
 
             <div className="card" style={{ padding:18 }}>
-              <div className="stitle" style={{ marginBottom:14 }}>🔒 ความปลอดภัย</div>
-              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:"1px solid #f0f0f0",gap:10 }}>
-                <div style={{ flex:1,minWidth:0 }}>
-                  <div style={{ fontSize:14,fontWeight:600 }}>PIN เข้าใช้งาน</div>
-                  <div style={{ fontSize:11,color:"#888",marginTop:2 }}>กรอก PIN ปัจจุบัน + ตั้งใหม่ — มีผลทันที</div>
-                </div>
-                <button
-                  className="btn btn-outline"
-                  onClick={()=>{ setPinChange({ step:"old",oldPin:"",newPin:"",confirmPin:"",code:"",pendingHash:"",codeSent:false,codeExpires:0,codeInput:"",lastError:"" }); setShowChangePin(true); }}
-                  style={{ fontSize:13,padding:"8px 14px",whiteSpace:"nowrap" }}
-                >เปลี่ยน PIN</button>
-              </div>
-              <div style={{ padding:"12px 0",fontSize:11,color:"#888",lineHeight:1.5,borderBottom:"1px solid #f0f0f0" }}>
-                🔒 PIN จะถูกล็อกอัตโนมัติทุกครั้งที่ออกจากแท็บ "ภาพรวม" — เข้าครั้งถัดไปต้องกรอกใหม่
-              </div>
+              <div className="stitle" style={{ marginBottom:14 }}>🔗 การเชื่อมต่อ</div>
               <div style={{ padding:"12px 0" }}>
-                <div style={{ fontSize:14,fontWeight:600 }}>🔗 Apps Script URL</div>
+                <div style={{ fontSize:14,fontWeight:600 }}>Apps Script URL</div>
                 <div style={{ fontSize:11,color:"#888",marginTop:2,marginBottom:8 }}>
                   ถ้าสร้าง deployment ใหม่และได้ URL ใหม่ ให้วาง URL ใหม่ที่นี่ (ปล่อยว่างเพื่อใช้ค่าเริ่มต้น)
                 </div>
@@ -2377,61 +2283,6 @@ export default function App() {
                 {saving?"กำลังลบ...":"ลบรายการ"}
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* CHANGE PIN MODAL — simple 2-step (no email confirmation) */}
-      {showChangePin&&(
-        <div className="modal-bg" onClick={()=>setShowChangePin(false)}>
-          <div className="modal" onClick={e=>e.stopPropagation()}>
-            <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
-            <div style={{ fontSize:32,textAlign:"center",marginBottom:6 }}>🔒</div>
-            <div style={{ fontWeight:800,fontSize:18,textAlign:"center",marginBottom:6 }}>เปลี่ยน PIN เข้าใช้งาน</div>
-            <div style={{ fontSize:12,color:"#888",textAlign:"center",marginBottom:18 }}>ขั้นตอนที่ {pinChange.step==="old"?1:2} / 2</div>
-
-            {pinChange.step==="old"&&(
-              <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-                <label style={{ fontSize:13,fontWeight:600,color:"#666" }}>PIN ปัจจุบัน</label>
-                <input type="password" inputMode="numeric" autoFocus maxLength={6} placeholder="• • • •" value={pinChange.oldPin}
-                  onChange={e=>setPinChange(p=>({...p,oldPin:e.target.value.replace(/\D/g,"")}))}
-                  style={{ padding:"14px 16px",fontSize:20,letterSpacing:"0.3em",textAlign:"center" }}/>
-                <div style={{ display:"flex",gap:10,marginTop:6 }}>
-                  <button className="btn btn-ghost" onClick={()=>setShowChangePin(false)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
-                  <button className="btn btn-primary" disabled={pinChange.oldPin.length<4} onClick={async()=>{
-                    const ok = await verifyPin(pinChange.oldPin);
-                    if (!ok) { showToast("PIN ปัจจุบันไม่ถูกต้อง","err"); return; }
-                    setPinChange(p=>({...p,step:"new"}));
-                  }} style={{ flex:2,padding:13 }}>ถัดไป</button>
-                </div>
-              </div>
-            )}
-
-            {pinChange.step==="new"&&(
-              <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-                <label style={{ fontSize:13,fontWeight:600,color:"#666" }}>PIN ใหม่ (4-6 หลัก)</label>
-                <input type="password" inputMode="numeric" autoFocus maxLength={6} placeholder="• • • •" value={pinChange.newPin}
-                  onChange={e=>setPinChange(p=>({...p,newPin:e.target.value.replace(/\D/g,"")}))}
-                  style={{ padding:"14px 16px",fontSize:20,letterSpacing:"0.3em",textAlign:"center" }}/>
-                <label style={{ fontSize:13,fontWeight:600,color:"#666" }}>ยืนยัน PIN ใหม่</label>
-                <input type="password" inputMode="numeric" maxLength={6} placeholder="• • • •" value={pinChange.confirmPin}
-                  onChange={e=>setPinChange(p=>({...p,confirmPin:e.target.value.replace(/\D/g,"")}))}
-                  style={{ padding:"14px 16px",fontSize:20,letterSpacing:"0.3em",textAlign:"center" }}/>
-                <div style={{ fontSize:11,color:"#bf360c",lineHeight:1.5,background:"#fff3e0",padding:"8px 12px",borderRadius:8,border:"1px solid #ffcc80" }}>
-                  ⚠️ PIN ใหม่จะมีผลทันทีที่กด "บันทึก PIN ใหม่"
-                </div>
-                <div style={{ display:"flex",gap:10,marginTop:6 }}>
-                  <button className="btn btn-ghost" onClick={()=>setPinChange(p=>({...p,step:"old"}))} style={{ flex:1,padding:13 }}>← ย้อน</button>
-                  <button className="btn btn-primary" disabled={pinChange.newPin.length<4||pinChange.newPin!==pinChange.confirmPin} onClick={async()=>{
-                    if (pinChange.newPin.length<4) { showToast("PIN ใหม่อย่างน้อย 4 หลัก","err"); return; }
-                    if (pinChange.newPin!==pinChange.confirmPin) { showToast("PIN ไม่ตรงกัน","err"); return; }
-                    await setPinHash(pinChange.newPin);
-                    setShowChangePin(false);
-                    showToast("เปลี่ยน PIN สำเร็จ ✅");
-                  }} style={{ flex:2,padding:13 }}>บันทึก PIN ใหม่</button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}
