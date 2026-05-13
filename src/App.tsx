@@ -1809,31 +1809,6 @@ export default function App() {
                   style={{ fontSize:13,padding:"8px 14px",whiteSpace:"nowrap" }}
                 >เปลี่ยน PIN</button>
               </div>
-              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:"1px solid #f0f0f0",gap:10 }}>
-                <div style={{ flex:1,minWidth:0 }}>
-                  <div style={{ fontSize:14,fontWeight:600 }}>🧪 ทดสอบส่งอีเมล</div>
-                  <div style={{ fontSize:11,color:"#888",marginTop:2 }}>ส่งโค้ดทดสอบไปยัง {PIN_NOTIFY_EMAIL} เพื่อตรวจสอบ Apps Script</div>
-                </div>
-                <button
-                  className="btn btn-ghost"
-                  disabled={saving}
-                  onClick={async()=>{
-                    setSaving(true);
-                    try {
-                      const testCode = genCode6();
-                      const res = await apiPost("notifyPinChange", { code: testCode, email: PIN_NOTIFY_EMAIL, ts: new Date().toISOString() });
-                      console.log("[test email] response:", res);
-                      if (res && res.ok) showToast(`ส่งทดสอบสำเร็จ — เช็คอีเมล (โค้ด ${testCode})`);
-                      else showToast("ส่งล้มเหลว: "+(res&&res.error?res.error:"ตรวจสอบ Apps Script"),"err");
-                    } catch (e) {
-                      console.error("[test email] error:", e);
-                      showToast("ติดต่อ Apps Script ไม่ได้ (ตรวจ console)","err");
-                    }
-                    setSaving(false);
-                  }}
-                  style={{ fontSize:13,padding:"8px 14px",whiteSpace:"nowrap" }}
-                >{saving?"...":"🧪 ทดสอบ"}</button>
-              </div>
               <div style={{ padding:"12px 0",fontSize:11,color:"#888",lineHeight:1.5 }}>
                 🔒 PIN จะถูกล็อกอัตโนมัติทุกครั้งที่ออกจากแท็บ "ภาพรวม" — เข้าครั้งถัดไปต้องกรอกใหม่
               </div>

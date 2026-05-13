@@ -205,6 +205,24 @@ function deleteProject(name) {
 }
 
 /**
+ * Run this ONCE from the Apps Script editor to grant MailApp permission.
+ *  1. In the editor, select function "authorize" from the dropdown next to ▶ Run.
+ *  2. Click ▶ Run. A dialog "Authorization required" will appear.
+ *  3. Click Review permissions → choose your Google account → Advanced →
+ *     "Go to {project} (unsafe)" → Allow.
+ *  4. After it completes, the deployed web app can send email.
+ * Sends a confirmation note to yourself so you know it worked.
+ */
+function authorize() {
+  MailApp.sendEmail({
+    to: "a.athiwat29@gmail.com",
+    subject: "Wadfun Finance - Authorization OK",
+    body: "MailApp is authorized. Your deployed web app can now send PIN change confirmation codes."
+  });
+  Logger.log("authorize(): test email sent to a.athiwat29@gmail.com");
+}
+
+/**
  * Send a one-time PIN-change confirmation code to the configured email.
  * Body: { code: "123456", email: "a.athiwat29@gmail.com", ts: "ISO8601" }
  * The frontend generates the code; the server only relays it via MailApp.
