@@ -987,91 +987,168 @@ export default function App() {
   );
 
   return (
-    <div style={{ fontFamily:"'Sarabun','Noto Sans Thai',sans-serif",background:"#f4f6fb",minHeight:"100vh",color:"#1a1a2e" }}>
+    <div style={{ fontFamily:"'Sarabun','Noto Sans Thai',sans-serif",background:"linear-gradient(180deg,#eef2fb 0%,#f7f8fd 100%)",minHeight:"100vh",color:"#0f172a" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
-        .card{background:#fff;border-radius:16px;box-shadow:0 1px 4px rgba(0,0,0,.06),0 4px 18px rgba(0,0,0,.04)}
-        .btn{border:none;border-radius:10px;cursor:pointer;font-family:inherit;font-weight:600;transition:all .15s;font-size:14px;-webkit-tap-highlight-color:transparent}
-        .btn:active{transform:scale(.96)}
-        .btn-primary{background:#1565c0;color:#fff;padding:12px 22px}.btn-primary:hover{background:#1976d2}
-        .btn-green{background:#2e7d32;color:#fff;padding:12px 22px}.btn-green:hover{background:#388e3c}
-        .btn-red{background:#c62828;color:#fff;padding:10px 16px;font-size:13px}.btn-red:hover{background:#d32f2f}
-        .btn-ghost{background:transparent;border:1.5px solid #ddd;color:#666;padding:10px 16px;font-size:13px}.btn-ghost:hover{border-color:#999;color:#333}
-        .btn-outline{background:transparent;border:1.5px solid #1565c0;color:#1565c0;padding:10px 16px;font-size:13px}
-        .btn-orange{background:#e65100;color:#fff;padding:10px 16px;font-size:13px}.btn-orange:hover{background:#f57c00}
-        input,select,textarea{background:#f8f9ff;border:1.5px solid #e0e4f0;border-radius:10px;color:#1a1a2e;font-family:inherit;padding:12px 14px;width:100%;font-size:16px;outline:none;transition:border-color .15s;-webkit-appearance:none}
-        input:focus,select:focus{border-color:#1565c0;background:#fff}
-        .badge{display:inline-block;border-radius:20px;padding:3px 12px;font-size:12px;font-weight:700}
-        .badge-income{background:#e8f5e9;color:#2e7d32}.badge-expense{background:#ffebee;color:#c62828}
-        .badge-pending{background:#fff3e0;color:#e65100}.badge-received{background:#e8f5e9;color:#2e7d32}
-        .tag{font-size:11px;background:#eff1ff;color:#3949ab;padding:3px 9px;border-radius:6px;font-weight:600}
-        .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);backdrop-filter:blur(4px);display:flex;align-items:flex-end;justify-content:center;z-index:200}
-        .modal{background:#fff;border-radius:20px 20px 0 0;padding:28px 24px 40px;width:100%;max-width:600px;box-shadow:0 -8px 40px rgba(0,0,0,.12);max-height:92vh;overflow-y:auto}
-        .toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);padding:12px 24px;border-radius:50px;font-size:14px;font-weight:600;z-index:999;box-shadow:0 4px 20px rgba(0,0,0,.15);animation:slideUp .25s ease;white-space:nowrap}
-        @keyframes slideUp{from{opacity:0;transform:translateX(-50%) translateY(12px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
-        .stitle{font-size:11px;font-weight:700;color:#bbb;letter-spacing:.09em;text-transform:uppercase;margin-bottom:14px}
-        .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #eee;display:flex;z-index:100;padding-bottom:env(safe-area-inset-bottom)}
-        .bnav-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:10px 4px;border:none;background:none;cursor:pointer;font-family:inherit;color:#aaa;font-size:10px;gap:3px;-webkit-tap-highlight-color:transparent;transition:color .15s}
-        .bnav-btn.active{color:#1565c0}
-        .bnav-btn span{font-size:20px}
-        .fab{position:fixed;bottom:72px;right:20px;width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#2e7d32,#43a047);color:#fff;border:none;font-size:28px;cursor:pointer;box-shadow:0 4px 16px rgba(46,125,50,.4);display:flex;align-items:center;justify-content:center;z-index:101;-webkit-tap-highlight-color:transparent}
-        .fab:active{transform:scale(.92)}
-        .urgent-badge{background:#ffebee;color:#c62828;border:1px solid #ef9a9a;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:8px}
-        .checkbox-row{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f8f9ff;border-radius:10px;border:1.5px solid #e0e4f0}
-        .checkbox-row input[type=checkbox]{width:20px;height:20px;accent-color:#1565c0;cursor:pointer}
+        body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+        ::selection{background:rgba(30,64,175,.18);color:#0f172a}
+
+        /* Cards — soft elevated surfaces */
+        .card{
+          background:#fff;border-radius:18px;
+          box-shadow:0 1px 2px rgba(15,23,42,.04), 0 4px 12px rgba(15,23,42,.04), 0 12px 24px -8px rgba(15,23,42,.06);
+          transition:box-shadow .2s ease, transform .2s ease;
+        }
+
+        /* Buttons — gradients + soft shadows */
+        .btn{
+          border:none;border-radius:12px;cursor:pointer;font-family:inherit;font-weight:600;
+          transition:all .15s cubic-bezier(.4,0,.2,1);font-size:14px;-webkit-tap-highlight-color:transparent;
+          letter-spacing:.01em;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+        }
+        .btn:active{transform:scale(.97)}
+        .btn:disabled{cursor:not-allowed;opacity:.5;transform:none!important}
+
+        .btn-primary{background:linear-gradient(135deg,#1e40af 0%,#2952c8 100%);color:#fff;padding:13px 22px;box-shadow:0 1px 2px rgba(30,64,175,.16), 0 4px 12px -2px rgba(30,64,175,.32)}
+        .btn-primary:hover{background:linear-gradient(135deg,#1a3a9e 0%,#244aba 100%);box-shadow:0 1px 3px rgba(30,64,175,.22), 0 6px 18px -2px rgba(30,64,175,.42)}
+        .btn-primary:disabled{background:#cbd5e1;color:#fff;box-shadow:none}
+
+        .btn-green{background:linear-gradient(135deg,#15803d 0%,#16a34a 100%);color:#fff;padding:13px 22px;box-shadow:0 1px 2px rgba(21,128,61,.16), 0 4px 12px -2px rgba(21,128,61,.32)}
+        .btn-green:hover{background:linear-gradient(135deg,#126632 0%,#15803d 100%)}
+
+        .btn-red{background:linear-gradient(135deg,#dc2626 0%,#ef4444 100%);color:#fff;padding:11px 18px;font-size:13px;box-shadow:0 1px 2px rgba(220,38,38,.16), 0 4px 12px -2px rgba(220,38,38,.32)}
+        .btn-red:hover{background:linear-gradient(135deg,#b91c1c 0%,#dc2626 100%)}
+
+        .btn-ghost{background:#f1f5f9;border:none;color:#475569;padding:11px 18px;font-size:13px}
+        .btn-ghost:hover{background:#e2e8f0;color:#1e293b}
+
+        .btn-outline{background:#fff;border:1.5px solid #cbd5e1;color:#1e40af;padding:11px 18px;font-size:13px;font-weight:700}
+        .btn-outline:hover{background:#eff6ff;border-color:#1e40af}
+
+        .btn-orange{background:linear-gradient(135deg,#d97706 0%,#ea580c 100%);color:#fff;padding:11px 18px;font-size:13px;box-shadow:0 1px 2px rgba(217,119,6,.16), 0 4px 12px -2px rgba(217,119,6,.3)}
+        .btn-orange:hover{background:linear-gradient(135deg,#b45309 0%,#c2410c 100%)}
+
+        /* Inputs — polished focus */
+        input,select,textarea{
+          background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:12px;color:#0f172a;
+          font-family:inherit;padding:13px 14px;width:100%;font-size:16px;outline:none;
+          transition:border-color .15s ease, background .15s ease, box-shadow .15s ease;-webkit-appearance:none
+        }
+        input:hover,select:hover,textarea:hover{border-color:#cbd5e1}
+        input:focus,select:focus,textarea:focus{border-color:#1e40af;background:#fff;box-shadow:0 0 0 4px rgba(30,64,175,.12)}
+
+        /* Badges & tags */
+        .badge{display:inline-block;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;letter-spacing:.01em}
+        .badge-income{background:#dcfce7;color:#15803d}
+        .badge-expense{background:#fee2e2;color:#c81e1e}
+        .badge-pending{background:#fef3c7;color:#b45309}
+        .badge-received{background:#dcfce7;color:#15803d}
+        .tag{font-size:11px;background:#eef2ff;color:#4338ca;padding:4px 10px;border-radius:8px;font-weight:600}
+
+        /* Modal */
+        .modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.5);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);display:flex;align-items:flex-end;justify-content:center;z-index:200;animation:fadeIn .2s ease}
+        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+        .modal{background:#fff;border-radius:24px 24px 0 0;padding:28px 24px 40px;width:100%;max-width:600px;box-shadow:0 -8px 60px rgba(15,23,42,.15);max-height:92vh;overflow-y:auto;animation:slideUpModal .3s cubic-bezier(.16,1,.3,1)}
+        @keyframes slideUpModal{from{transform:translateY(100%)}to{transform:translateY(0)}}
+
+        /* Toast */
+        .toast{position:fixed;bottom:96px;left:50%;transform:translateX(-50%);padding:14px 26px;border-radius:50px;font-size:14px;font-weight:600;z-index:999;box-shadow:0 8px 32px rgba(15,23,42,.2);animation:slideUp .3s cubic-bezier(.16,1,.3,1);white-space:nowrap}
+        @keyframes slideUp{from{opacity:0;transform:translateX(-50%) translateY(20px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+
+        /* Section title */
+        .stitle{font-size:11px;font-weight:700;color:#94a3b8;letter-spacing:.12em;text-transform:uppercase;margin-bottom:14px}
+
+        /* Bottom nav — floating capsule */
+        .bottom-nav{
+          position:fixed;bottom:14px;left:50%;transform:translateX(-50%);
+          background:rgba(255,255,255,.92);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+          border:1px solid rgba(15,23,42,.06);border-radius:22px;
+          display:flex;gap:4px;z-index:100;padding:6px;
+          box-shadow:0 4px 20px rgba(15,23,42,.08), 0 16px 40px -8px rgba(15,23,42,.12);
+          padding-bottom:max(6px, env(safe-area-inset-bottom));
+          width:auto;min-width:300px;max-width:calc(100vw - 28px);
+        }
+        .bnav-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:9px 14px;border:none;background:transparent;cursor:pointer;font-family:inherit;color:#94a3b8;font-size:10px;gap:3px;font-weight:600;border-radius:16px;-webkit-tap-highlight-color:transparent;transition:all .2s ease;position:relative;min-width:62px;letter-spacing:.02em}
+        .bnav-btn:hover{color:#475569}
+        .bnav-btn.active{color:#fff;background:linear-gradient(135deg,#1e40af 0%,#2952c8 100%);box-shadow:0 4px 14px rgba(30,64,175,.36)}
+        .bnav-btn span{font-size:18px}
+
+        /* FAB */
+        .fab{position:fixed;bottom:96px;right:20px;width:56px;height:56px;border-radius:18px;background:linear-gradient(135deg,#15803d,#16a34a);color:#fff;border:none;font-size:28px;cursor:pointer;box-shadow:0 8px 24px rgba(21,128,61,.4);display:flex;align-items:center;justify-content:center;z-index:101;-webkit-tap-highlight-color:transparent;transition:transform .15s ease}
+        .fab:hover{transform:scale(1.05)}
+        .fab:active{transform:scale(.95)}
+
+        /* Misc */
+        .urgent-badge{background:#fee2e2;color:#c81e1e;border:1px solid #fca5a5;border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:8px}
+        .checkbox-row{display:flex;align-items:center;gap:10px;padding:11px 14px;background:#f8fafc;border-radius:12px;border:1.5px solid #e2e8f0;transition:all .15s}
+        .checkbox-row:hover{background:#f1f5f9}
+        .checkbox-row input[type=checkbox]{width:20px;height:20px;accent-color:#1e40af;cursor:pointer}
+        .num{font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+
+        /* Smooth fade-in on view change */
+        @keyframes contentFade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+        main, [data-view]{animation:contentFade .25s ease}
       `}</style>
 
       {/* HEADER */}
-      <div style={{ background:"#fff",borderBottom:"1px solid #eee",position:"sticky",top:0,zIndex:100 }}>
+      <div style={{ background:"rgba(255,255,255,.82)",backdropFilter:"blur(20px)",WebkitBackdropFilter:"blur(20px)",borderBottom:"1px solid rgba(15,23,42,.06)",position:"sticky",top:0,zIndex:100 }}>
         <div style={{ maxWidth:900,margin:"0 auto",padding:"0 16px" }}>
           <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",height:64 }}>
             <div style={{ display:"flex",alignItems:"center",gap:12 }}>
               <img src="/logo-cropped.jpg" alt="Wadfun" style={{ height:36,width:"auto",display:"block" }}/>
-              <div style={{ borderLeft:"1px solid #eee",paddingLeft:12 }}>
-                <div style={{ fontWeight:700,fontSize:13,color:"#1a1a2e" }}>Finance</div>
-                <div style={{ fontSize:10,color:"#bbb" }}>ระบบบัญชีรายรับ-รายจ่าย</div>
+              <div style={{ borderLeft:"1px solid #e2e8f0",paddingLeft:12 }}>
+                <div style={{ fontWeight:800,fontSize:13,color:"#0f172a",letterSpacing:".02em" }}>Finance</div>
+                <div style={{ fontSize:10,color:"#94a3b8",marginTop:1 }}>ระบบบัญชีรายรับ-รายจ่าย</div>
               </div>
             </div>
             <div style={{ display:"flex",gap:8,alignItems:"center" }}>
-              <button className="btn btn-ghost" style={{ fontSize:13,padding:"6px 10px",position:"relative" }} onClick={()=>setShowNotifPopup(true)}>
-                🔔{urgentInst.length>0&&<span style={{ position:"absolute",top:-2,right:-2,background:"#c62828",color:"#fff",borderRadius:50,minWidth:16,height:16,padding:"0 4px",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700 }}>{urgentInst.length}</span>}
+              <button onClick={()=>setShowNotifPopup(true)} style={{ position:"relative",width:38,height:38,borderRadius:12,background:urgentInst.length>0?"#fef3c7":"#f1f5f9",color:urgentInst.length>0?"#b45309":"#475569",border:"none",cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .15s",WebkitTapHighlightColor:"transparent" }}>
+                🔔{urgentInst.length>0&&<span style={{ position:"absolute",top:-3,right:-3,background:"linear-gradient(135deg,#dc2626,#ef4444)",color:"#fff",borderRadius:50,minWidth:18,height:18,padding:"0 5px",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,boxShadow:"0 2px 6px rgba(220,38,38,.4)" }}>{urgentInst.length}</span>}
               </button>
-              <button className="btn btn-ghost" style={{ fontSize:12,padding:"8px 12px" }} onClick={loadAll}>🔄</button>
+              <button onClick={loadAll} style={{ width:38,height:38,borderRadius:12,background:"#f1f5f9",color:"#475569",border:"none",cursor:"pointer",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .15s",WebkitTapHighlightColor:"transparent" }} title="รีโหลด">🔄</button>
             </div>
           </div>
         </div>
       </div>
 
-      <div style={{ maxWidth:900,margin:"0 auto",padding:"20px 16px 140px" }}>
+      <div style={{ maxWidth:900,margin:"0 auto",padding:"20px 16px 120px" }}>
 
         {/* DASHBOARD — PIN gate */}
         {view==="dashboard"&&!authenticated&&(
-          <div className="card" style={{ padding:"36px 24px",maxWidth:420,margin:"40px auto",textAlign:"center" }}>
-            <img src="/logo-cropped.jpg" alt="Wadfun" style={{ height:40,width:"auto",display:"block",margin:"0 auto 14px" }}/>
-            <div style={{ fontSize:30,marginBottom:6 }}>🔒</div>
-            <div style={{ fontWeight:800,fontSize:17,marginBottom:6 }}>หน้าภาพรวม — เฉพาะ CEO</div>
-            <div style={{ fontSize:12,color:"#888",marginBottom:22 }}>กรอก PIN เพื่อดูข้อมูลสรุปและภาษี</div>
-            <form onSubmit={async (e)=>{
-              e.preventDefault();
-              const ok = await verifyPin(pinInput);
-              if (ok) { setAuthenticated(true); setPinInput(""); setPinError(null); }
-              else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
-            }}>
-              <input
-                type="password"
-                inputMode="numeric"
-                autoFocus
-                maxLength={6}
-                placeholder="• • • •"
-                value={pinInput}
-                onChange={e=>{ setPinInput(e.target.value.replace(/\D/g,"")); setPinError(null); }}
-                style={{ width:"100%",padding:"16px 18px",fontSize:24,letterSpacing:"0.4em",textAlign:"center",border:`2px solid ${pinError?"#c62828":"#e0e4f0"}`,borderRadius:14,outline:"none",fontFamily:"inherit",background:"#f8f9ff" }}
-              />
-              {pinError&&<div style={{ color:"#c62828",fontSize:13,marginTop:10,fontWeight:600 }}>⚠️ {pinError}</div>}
-              <button type="submit" disabled={pinInput.length<4} style={{ width:"100%",marginTop:16,padding:14,fontSize:15,fontWeight:700,fontFamily:"inherit",background:pinInput.length<4?"#bbb":"#1565c0",color:"#fff",border:"none",borderRadius:12,cursor:pinInput.length<4?"not-allowed":"pointer" }}>ดูหน้าภาพรวม</button>
-            </form>
-            <div style={{ marginTop:16,fontSize:11,color:"#aaa" }}>คุณสามารถดูแท็บอื่นได้โดยไม่ต้องใส่ PIN</div>
+          <div style={{ maxWidth:420,margin:"56px auto 0",textAlign:"center" }}>
+            <div className="card" style={{ padding:"40px 28px 32px",position:"relative",overflow:"hidden" }}>
+              <div style={{ position:"absolute",top:-60,left:-60,width:180,height:180,borderRadius:"50%",background:"radial-gradient(circle, rgba(30,64,175,.08) 0%, transparent 70%)",pointerEvents:"none" }}/>
+              <div style={{ position:"absolute",bottom:-80,right:-60,width:200,height:200,borderRadius:"50%",background:"radial-gradient(circle, rgba(21,128,61,.06) 0%, transparent 70%)",pointerEvents:"none" }}/>
+              <div style={{ position:"relative" }}>
+                <img src="/logo-cropped.jpg" alt="Wadfun" style={{ height:42,width:"auto",display:"block",margin:"0 auto 18px" }}/>
+                <div style={{ width:64,height:64,margin:"0 auto 14px",borderRadius:18,background:"linear-gradient(135deg,#1e40af 0%,#2952c8 100%)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,boxShadow:"0 8px 20px rgba(30,64,175,.32)" }}>🔒</div>
+                <div style={{ fontWeight:800,fontSize:19,marginBottom:6,color:"#0f172a" }}>หน้าภาพรวม</div>
+                <div style={{ fontSize:13,color:"#64748b",marginBottom:24,lineHeight:1.5 }}>กรอก PIN เพื่อเข้าดู<br/>ข้อมูลสรุปและภาษี</div>
+                <form onSubmit={async (e)=>{
+                  e.preventDefault();
+                  const ok = await verifyPin(pinInput);
+                  if (ok) { setAuthenticated(true); setPinInput(""); setPinError(null); }
+                  else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
+                }}>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    autoFocus
+                    maxLength={6}
+                    placeholder="• • • •"
+                    value={pinInput}
+                    onChange={e=>{ setPinInput(e.target.value.replace(/\D/g,"")); setPinError(null); }}
+                    style={{ width:"100%",padding:"18px 20px",fontSize:28,letterSpacing:"0.5em",textAlign:"center",border:`2px solid ${pinError?"#dc2626":"#e2e8f0"}`,borderRadius:14,outline:"none",fontFamily:"inherit",background:"#f8fafc",fontWeight:700 }}
+                  />
+                  {pinError&&<div style={{ color:"#dc2626",fontSize:13,marginTop:12,fontWeight:600,padding:"8px 12px",background:"#fef2f2",borderRadius:10,border:"1px solid #fecaca" }}>⚠️ {pinError}</div>}
+                  <button type="submit" disabled={pinInput.length<4} className="btn btn-primary" style={{ width:"100%",marginTop:16,padding:15,fontSize:15 }}>ปลดล็อก</button>
+                </form>
+                <div style={{ marginTop:20,paddingTop:18,borderTop:"1px solid #f1f5f9",fontSize:11,color:"#94a3b8",lineHeight:1.6 }}>
+                  💡 คุณดูแท็บโครงการ / ตั้งค่าได้ โดยไม่ต้องใส่ PIN
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1133,11 +1210,14 @@ export default function App() {
 
             {/* Stat cards */}
             <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
-              {[{l:"รายรับรวม",v:totalIncome,c:"#2e7d32",bg:"#e8f5e9",i:"💰"},{l:"รายจ่ายรวม",v:totalExpense,c:"#c62828",bg:"#ffebee",i:"💸"}].map(x=>(
-                <div key={x.l} className="card" style={{ padding:16,background:x.bg,border:"none" }}>
-                  <div style={{ fontSize:18,marginBottom:6 }}>{x.i}</div>
-                  <div style={{ fontSize:11,color:"#777",marginBottom:3 }}>{x.l}</div>
-                  <div style={{ fontSize:18,fontWeight:800,color:x.c }}>฿{fmt(x.v)}</div>
+              {[
+                {l:"รายรับรวม",v:totalIncome,c:"#15803d",bg:"linear-gradient(135deg,#dcfce7 0%,#f0fdf4 100%)",ring:"rgba(21,128,61,.15)",i:"💰"},
+                {l:"รายจ่ายรวม",v:totalExpense,c:"#dc2626",bg:"linear-gradient(135deg,#fee2e2 0%,#fef2f2 100%)",ring:"rgba(220,38,38,.15)",i:"💸"}
+              ].map(x=>(
+                <div key={x.l} className="card" style={{ padding:18,background:x.bg,border:"none",position:"relative",overflow:"hidden" }}>
+                  <div style={{ width:38,height:38,borderRadius:12,background:"rgba(255,255,255,.7)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,boxShadow:`0 2px 8px ${x.ring}`,marginBottom:10 }}>{x.i}</div>
+                  <div style={{ fontSize:11,color:"#64748b",marginBottom:4,fontWeight:600,letterSpacing:".02em" }}>{x.l}</div>
+                  <div className="num" style={{ fontSize:19,fontWeight:800,color:x.c }}>฿{fmt(x.v)}</div>
                 </div>
               ))}
             </div>
