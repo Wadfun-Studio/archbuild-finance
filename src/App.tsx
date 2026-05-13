@@ -290,12 +290,47 @@ type WhtType = "withheld"|"withhold";
 interface Entry { id: number; date: string; type: string; category: string; project: string; description: string; amount: number; vat?: number; wht?: number; vatType?: VatType; whtType?: WhtType; }
 type InstKind = "receivable"|"payable";
 type InstStatus = "pending"|"received"|"paid";
-interface ProjectTaxSettings { hasVat: boolean; hasWht: boolean; whtRate: number; }
-interface Installment { id: number; kind: InstKind; project: string; name: string; description?: string; amount: number; dueDate: string; status: InstStatus; completedDate?: string; invoiceNo?: string; receiptNo?: string; hasVat?: boolean; hasWht?: boolean; whtRate?: number; }
-interface FormState { date: string; type: string; category: string; project: string; description: string; amount: string; useVat: boolean; useWht: boolean; }
-interface InstForm { kind: InstKind; project: string; name: string; description: string; amount: string; dueDate: string; }
+type InstScope = "design"|"construction";
 
-const defaultTaxSettings: ProjectTaxSettings = { hasVat: false, hasWht: false, whtRate: 3 };
+const SCOPES: { v: InstScope; l: string; icon: string }[] = [
+  { v: "design", l: "งานออกแบบ", icon: "✏️" },
+  { v: "construction", l: "งานก่อสร้าง/ตกแต่งภายใน", icon: "🏗️" },
+];
+const scopeLabel = (s: InstScope) => SCOPES.find(x=>x.v===s)?.l || s;
+const WORK_CATS_BY_SCOPE: Record<InstScope, string[]> = {
+  design: ["ค่าออกแบบ","ค่าที่ปรึกษา","ค่าเขียนแบบ","ค่าควบคุมงาน","อื่นๆ (งานออกแบบ)"],
+  construction: ["ค่าตกแต่งภายใน","ค่าก่อสร้าง","ค่าวัสดุ/ค่าของ","ค่าแรงงาน","ค่าเช่าเครื่องจักร","อื่นๆ (งานก่อสร้าง)"],
+};
+
+interface ProjectScopeTax { hasVat: boolean; hasWht: boolean; whtRate: number; }
+interface ProjectTaxSettings { design: ProjectScopeTax; construction: ProjectScopeTax; }
+interface Installment { id: number; kind: InstKind; scope: InstScope; workCategory: string; project: string; name: string; description?: string; amount: number; dueDate: string; status: InstStatus; completedDate?: string; invoiceNo?: string; receiptNo?: string; hasVat?: boolean; hasWht?: boolean; whtRate?: number; }
+interface FormState { date: string; type: string; category: string; project: string; description: string; amount: string; useVat: boolean; useWht: boolean; }
+interface InstForm { kind: InstKind; scope: InstScope; workCategory: string; project: string; name: string; description: string; amount: string; dueDate: string; }
+
+const defaultScopeTax: ProjectScopeTax = { hasVat: false, hasWht: false, whtRate: 3 };
+const defaultTaxSettings: ProjectTaxSettings = { design: { ...defaultScopeTax }, construction: { ...defaultScopeTax } };
+
+function normalizeTaxSettings(raw: unknown): ProjectTaxSettings {
+  if (raw && typeof raw === "object") {
+    const r = raw as Record<string, unknown>;
+    const isScopeShape = (x: unknown): x is ProjectScopeTax =>
+      !!x && typeof x === "object" && "hasVat" in (x as object);
+    if (isScopeShape(r.design) && isScopeShape(r.construction)) {
+      return { design: r.design, construction: r.construction };
+    }
+    // legacy flat shape — replicate to both scopes
+    if ("hasVat" in r || "hasWht" in r || "whtRate" in r) {
+      const flat: ProjectScopeTax = {
+        hasVat: !!r.hasVat,
+        hasWht: !!r.hasWht,
+        whtRate: typeof r.whtRate === "number" ? r.whtRate : 3,
+      };
+      return { design: { ...flat }, construction: { ...flat } };
+    }
+  }
+  return { design: { ...defaultScopeTax }, construction: { ...defaultScopeTax } };
+}
 
 const instLabel = (kind: InstKind) => kind==="payable" ? "งวดจ่าย" : "งวดเบิก";
 const instDoneLabel = (kind: InstKind) => kind==="payable" ? "จ่ายเงินแล้ว" : "รับเงินแล้ว";
@@ -350,8 +385,10 @@ export default function App() {
   const [newProj, setNewProj] = useState("");
   const [toast, setToast] = useState<{msg:string,type:string}|null>(null);
   const [showInstForm, setShowInstForm] = useState(false);
-  const [instForm, setInstForm] = useState<InstForm>({ kind:"receivable", project:"", name:"งวดที่ 1", description:"", amount:"", dueDate:"" });
+  const [instForm, setInstForm] = useState<InstForm>({ kind:"receivable", scope:"design", workCategory: WORK_CATS_BY_SCOPE.design[0], project:"", name:"งวดที่ 1", description:"", amount:"", dueDate:"" });
   const [instTab, setInstTab] = useState<InstKind>("receivable");
+  const [activeScope, setActiveScope] = useState<InstScope>("design");
+  const [deleteInstId, setDeleteInstId] = useState<number|null>(null);
   const [showTaxSummary, setShowTaxSummary] = useState(false);
   const [notifGranted, setNotifGranted] = useState(false);
   const [selectedProject, setSelectedProject] = useState<string|null>(null);
@@ -360,7 +397,7 @@ export default function App() {
   const [sheetSetupDismissed, setSheetSetupDismissed] = useState<boolean>(()=>localStorage.getItem("wf_sheet_setup_dismissed")==="1");
   function dismissSheetSetup() { localStorage.setItem("wf_sheet_setup_dismissed","1"); setSheetSetupDismissed(true); }
   const [projectTax, setProjectTax] = useState<Record<string, ProjectTaxSettings>>({});
-  const [pendingTaxPropagate, setPendingTaxPropagate] = useState<{ name: string; next: ProjectTaxSettings }|null>(null);
+  const [pendingTaxPropagate, setPendingTaxPropagate] = useState<{ name: string; scope: InstScope; next: ProjectScopeTax }|null>(null);
   const [notifEnabled, setNotifEnabled] = useState<boolean>(()=>localStorage.getItem("wf_notif_enabled")!=="0");
   const [alertDaysAhead, setAlertDaysAhead] = useState<number>(()=>{
     const v = parseInt(localStorage.getItem("wf_alert_days_ahead")||"7",10);
@@ -383,22 +420,25 @@ export default function App() {
   }
 
   const getProjectTax = useCallback((name: string): ProjectTaxSettings => projectTax[name] || defaultTaxSettings, [projectTax]);
+  const getProjectScopeTax = useCallback((name: string, scope: InstScope): ProjectScopeTax => getProjectTax(name)[scope] || defaultScopeTax, [getProjectTax]);
 
   function saveProjectTax(map: Record<string, ProjectTaxSettings>) {
     setProjectTax(map);
     localStorage.setItem("wf_project_tax", JSON.stringify(map));
   }
 
-  function updateProjectTaxField(name: string, partial: Partial<ProjectTaxSettings>) {
-    const next: ProjectTaxSettings = { ...getProjectTax(name), ...partial };
-    saveProjectTax({ ...projectTax, [name]: next });
-    if (installments.some(i => i.project === name)) {
-      setPendingTaxPropagate({ name, next });
+  function updateProjectScopeTaxField(name: string, scope: InstScope, partial: Partial<ProjectScopeTax>) {
+    const current = getProjectTax(name);
+    const nextScope: ProjectScopeTax = { ...current[scope], ...partial };
+    const nextFull: ProjectTaxSettings = { ...current, [scope]: nextScope };
+    saveProjectTax({ ...projectTax, [name]: nextFull });
+    if (installments.some(i => i.project === name && i.scope === scope)) {
+      setPendingTaxPropagate({ name, scope, next: nextScope });
     }
   }
 
-  function propagateTaxToInstallments(name: string, t: ProjectTaxSettings) {
-    saveInstallments(installments.map(i => i.project === name ? { ...i, hasVat: t.hasVat, hasWht: t.hasWht, whtRate: t.whtRate } : i));
+  function propagateTaxToInstallments(name: string, scope: InstScope, t: ProjectScopeTax) {
+    saveInstallments(installments.map(i => i.project === name && i.scope === scope ? { ...i, hasVat: t.hasVat, hasWht: t.hasWht, whtRate: t.whtRate } : i));
   }
 
   const loadAll = useCallback(async () => {
@@ -420,15 +460,38 @@ export default function App() {
         setEntries(normalized);
       }
       if (pRes.ok) setProjects(pRes.projects);
-      // load installments from localStorage (migrate older records without kind)
+      // load installments from localStorage (migrate older records)
       const saved = localStorage.getItem("wf_installments");
       if (saved) {
-        const list: Installment[] = JSON.parse(saved).map((i: Installment & {kind?: InstKind}) => ({ ...i, kind: i.kind || "receivable" }));
+        const raw = JSON.parse(saved) as Array<Partial<Installment> & {kind?: InstKind; scope?: InstScope; workCategory?: string}>;
+        const list: Installment[] = raw.map(i => ({
+          id: i.id ?? Date.now(),
+          kind: i.kind || "receivable",
+          scope: i.scope || "construction",
+          workCategory: i.workCategory || (i.scope === "design" ? WORK_CATS_BY_SCOPE.design[0] : WORK_CATS_BY_SCOPE.construction[0]),
+          project: i.project || "",
+          name: i.name || "",
+          description: i.description,
+          amount: typeof i.amount === "number" ? i.amount : Number(i.amount) || 0,
+          dueDate: i.dueDate || today(),
+          status: i.status || "pending",
+          completedDate: i.completedDate,
+          invoiceNo: i.invoiceNo,
+          receiptNo: i.receiptNo,
+          hasVat: i.hasVat,
+          hasWht: i.hasWht,
+          whtRate: i.whtRate,
+        }));
         setInstallments(list);
       }
-      // load per-project tax settings
+      // load per-project tax settings (migrate legacy flat shape to per-scope)
       const taxSaved = localStorage.getItem("wf_project_tax");
-      if (taxSaved) setProjectTax(JSON.parse(taxSaved));
+      if (taxSaved) {
+        const parsed = JSON.parse(taxSaved) as Record<string, unknown>;
+        const migrated: Record<string, ProjectTaxSettings> = {};
+        for (const [k,v] of Object.entries(parsed)) migrated[k] = normalizeTaxSettings(v);
+        setProjectTax(migrated);
+      }
     } catch { setError("เชื่อมต่อไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ต"); }
     setLoading(false);
   }, []);
@@ -469,12 +532,24 @@ export default function App() {
   }
 
   function addInstallment() {
-    if (!instForm.project || !instForm.name || !instForm.amount || !instForm.dueDate) { showToast("กรอกข้อมูลให้ครบ", "err"); return; }
-    const t = getProjectTax(instForm.project);
-    const newInst: Installment = { id: Date.now(), kind: instForm.kind, project: instForm.project, name: instForm.name, description: instForm.description.trim() || undefined, amount: +instForm.amount, dueDate: instForm.dueDate, status: "pending", hasVat: t.hasVat, hasWht: t.hasWht, whtRate: t.whtRate };
+    if (!instForm.project || !instForm.name || !instForm.amount || !instForm.dueDate || !instForm.workCategory) { showToast("กรอกข้อมูลให้ครบ", "err"); return; }
+    const t = getProjectScopeTax(instForm.project, instForm.scope);
+    const newInst: Installment = {
+      id: Date.now(),
+      kind: instForm.kind,
+      scope: instForm.scope,
+      workCategory: instForm.workCategory,
+      project: instForm.project,
+      name: instForm.name,
+      description: instForm.description.trim() || undefined,
+      amount: +instForm.amount,
+      dueDate: instForm.dueDate,
+      status: "pending",
+      hasVat: t.hasVat, hasWht: t.hasWht, whtRate: t.whtRate
+    };
     saveInstallments([...installments, newInst]);
     setShowInstForm(false);
-    setInstForm({ kind: instForm.kind, project: projects[0]||"", name:"งวดที่ 1", description:"", amount:"", dueDate:"" });
+    setInstForm({ kind: instForm.kind, scope: instForm.scope, workCategory: WORK_CATS_BY_SCOPE[instForm.scope][0], project: projects[0]||"", name:"งวดที่ 1", description:"", amount:"", dueDate:"" });
     showToast(`เพิ่ม${instLabel(instForm.kind)}แล้ว`);
   }
 
@@ -518,12 +593,6 @@ export default function App() {
 
   function showToast(msg: string, type="ok") { setToast({msg, type}); setTimeout(()=>setToast(null), 2800); }
 
-  function openAddExpense(projectName: string) {
-    const tax = getProjectTax(projectName);
-    setEditId(null);
-    setForm({ date:today(), type:"expense", category:CATS_EX[0], project: projectName, description:"", amount:"", useVat:tax.hasVat, useWht:tax.hasWht });
-    setShowForm(true);
-  }
   function openEdit(e: Entry) { setEditId(e.id); setForm({...e, amount:String(e.amount), useVat:!!e.vat, useWht:!!e.wht}); setShowForm(true); }
 
   const calcTax = (amount: number, useVat: boolean, useWht: boolean) => ({
@@ -1056,14 +1125,12 @@ export default function App() {
               <button className="btn btn-green" onClick={()=>setShowProjMgr(true)} style={{ padding:"10px 18px" }}>+ เพิ่มโครงการ</button>
             </div>
           );
-          const projEntries = entries.filter(e=>e.project===proj).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-          const projExpenseEntries = projEntries.filter(e=>e.type==="expense");
-          const projInst = installments.filter(i=>i.project===proj);
-          // P&L: real cash movement — received receivables for income, paid payables + expense entries for expense
+          const projInstAll = installments.filter(i=>i.project===proj);
+          // Filter by active scope (งานออกแบบ / งานก่อสร้าง)
+          const projInst = projInstAll.filter(i=>i.scope===activeScope);
+          // P&L: real cash movement — per scope (installments only)
           const pIncome = projInst.filter(i=>i.kind==="receivable"&&i.status==="received").reduce((s,i)=>s+i.amount,0);
-          const pExpensePaidInst = projInst.filter(i=>i.kind==="payable"&&i.status==="paid").reduce((s,i)=>s+i.amount,0);
-          const pExpenseEntries = projExpenseEntries.reduce((s,e)=>s+e.amount,0);
-          const pExpense = pExpensePaidInst + pExpenseEntries;
+          const pExpense = projInst.filter(i=>i.kind==="payable"&&i.status==="paid").reduce((s,i)=>s+i.amount,0);
           const pNet = pIncome - pExpense;
           const margin = pIncome>0 ? (pNet/pIncome)*100 : 0;
           const tabList = projInst.filter(i=>i.kind===instTab).sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
@@ -1077,6 +1144,7 @@ export default function App() {
           const isRecv = instTab==="receivable";
           const accent = isRecv ? "#2e7d32" : "#c62828";
           const accentBg = isRecv ? "#e8f5e9" : "#ffebee";
+          const scopeWorkCats = WORK_CATS_BY_SCOPE[activeScope];
           return (
             <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
               {/* Project selector */}
@@ -1110,9 +1178,23 @@ export default function App() {
                 })()}
               </div>
 
-              {/* Project tax settings */}
+              {/* Scope tabs (Design / Construction) */}
+              <div style={{ display:"flex",background:"#fff",borderRadius:12,padding:4,boxShadow:"0 1px 4px rgba(0,0,0,.06)" }}>
+                {SCOPES.map(s=>{
+                  const count = projInstAll.filter(i=>i.scope===s.v&&i.status==="pending").length;
+                  const active = activeScope===s.v;
+                  return (
+                    <button key={s.v} onClick={()=>setActiveScope(s.v)} style={{ flex:1,padding:"12px 8px",border:"none",borderRadius:8,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,background:active?"#1565c0":"transparent",color:active?"#fff":"#888" }}>
+                      <span style={{ marginRight:6 }}>{s.icon}</span>{s.l}
+                      {count>0&&<span style={{ marginLeft:6,background:active?"rgba(255,255,255,.25)":"#f0f0f0",padding:"1px 7px",borderRadius:10,fontSize:11 }}>{count}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Project tax settings (per scope) */}
               {(()=>{
-                const pt = getProjectTax(proj);
+                const pst = getProjectScopeTax(proj, activeScope);
                 const checkboxRow = (checked: boolean, label: string, onClick: ()=>void, extra?: ReactNode) => (
                   <div style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:checked?"#e8f5e9":"#f8f9ff",borderRadius:10,border:`1.5px solid ${checked?"#2e7d32":"#e0e4f0"}`,cursor:"pointer" }} onClick={onClick}>
                     <div style={{ width:22,height:22,borderRadius:6,background:checked?"#2e7d32":"#fff",border:`2px solid ${checked?"#2e7d32":"#bbb"}`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:800,flexShrink:0 }}>
@@ -1124,28 +1206,28 @@ export default function App() {
                 );
                 return (
                   <div className="card" style={{ padding:14 }}>
-                    <div className="stitle" style={{ marginBottom:10 }}>⚙️ ภาษีของโครงการ</div>
+                    <div className="stitle" style={{ marginBottom:10 }}>⚙️ ภาษีของ{scopeLabel(activeScope)}</div>
                     <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-                      {checkboxRow(pt.hasVat, "VAT 7%", ()=>updateProjectTaxField(proj, { hasVat: !pt.hasVat }))}
-                      {checkboxRow(pt.hasWht, `หัก ณ ที่จ่าย ${pt.hasWht?pt.whtRate:""}${pt.hasWht?"%":""}`.trim(), ()=>updateProjectTaxField(proj, { hasWht: !pt.hasWht }),
-                        pt.hasWht ? (
+                      {checkboxRow(pst.hasVat, "VAT 7%", ()=>updateProjectScopeTaxField(proj, activeScope, { hasVat: !pst.hasVat }))}
+                      {checkboxRow(pst.hasWht, `หัก ณ ที่จ่าย ${pst.hasWht?pst.whtRate:""}${pst.hasWht?"%":""}`.trim(), ()=>updateProjectScopeTaxField(proj, activeScope, { hasWht: !pst.hasWht }),
+                        pst.hasWht ? (
                           <div style={{ display:"flex",alignItems:"center",gap:4 }} onClick={e=>e.stopPropagation()}>
-                            <input type="number" min="0" max="50" step="0.5" value={pt.whtRate} onChange={e=>updateProjectTaxField(proj, { whtRate: +e.target.value })} style={{ width:64,padding:"6px 8px",fontSize:13,textAlign:"center" }}/>
+                            <input type="number" min="0" max="50" step="0.5" value={pst.whtRate} onChange={e=>updateProjectScopeTaxField(proj, activeScope, { whtRate: +e.target.value })} style={{ width:64,padding:"6px 8px",fontSize:13,textAlign:"center" }}/>
                             <span style={{ fontSize:13,fontWeight:600,color:"#1b5e20" }}>%</span>
                           </div>
                         ) : undefined
                       )}
                     </div>
-                    <div style={{ marginTop:8,fontSize:11,color:"#888" }}>ค่านี้จะถูก lock ลงในงวดใหม่ที่สร้างต่อไปอัตโนมัติ</div>
+                    <div style={{ marginTop:8,fontSize:11,color:"#888" }}>ค่านี้จะถูก lock ลงในงวด{scopeLabel(activeScope)}ใหม่ที่สร้างต่อไปอัตโนมัติ</div>
                   </div>
                 );
               })()}
 
-              {/* P&L summary card */}
+              {/* P&L summary card (per scope) */}
               <div className="card" style={{ padding:0,overflow:"hidden" }}>
                 <div style={{ padding:"12px 16px",background:"#f8f9ff",borderBottom:"1px solid #eef0f8",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
-                  <div className="stitle" style={{ margin:0 }}>กำไรขาดทุน (P&amp;L)</div>
-                  <div style={{ fontSize:11,color:"#aaa" }}>{projEntries.length} รายการ</div>
+                  <div className="stitle" style={{ margin:0 }}>กำไรขาดทุน (P&amp;L) — {scopeLabel(activeScope)}</div>
+                  <div style={{ fontSize:11,color:"#aaa" }}>{projInst.length} งวด</div>
                 </div>
                 <div style={{ padding:"4px 16px" }}>
                   <div style={{ display:"flex",justifyContent:"space-between",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
@@ -1177,11 +1259,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Log expense for this project */}
-              <button className="btn btn-red" onClick={()=>openAddExpense(proj)} style={{ width:"100%",padding:14,fontSize:15 }}>
-                💸 + บันทึกรายจ่าย
-              </button>
-
               {/* Installment tabs */}
               <div style={{ display:"flex",background:"#fff",borderRadius:12,padding:4,boxShadow:"0 1px 4px rgba(0,0,0,.06)",marginTop:4 }}>
                 {([
@@ -1211,11 +1288,11 @@ export default function App() {
                 </div>
               </div>
 
-              <button className="btn" style={{ width:"100%",padding:14,fontSize:15,background:accent,color:"#fff" }} onClick={()=>{ setInstForm({kind:instTab,project:proj,name:`${instLabel(instTab)}ที่ ${tabList.length+1}`,description:"",amount:"",dueDate:""}); setShowInstForm(true); }}>
-                + เพิ่ม{instLabel(instTab)}สำหรับโครงการนี้
+              <button className="btn" style={{ width:"100%",padding:14,fontSize:15,background:accent,color:"#fff" }} onClick={()=>{ setInstForm({kind:instTab,scope:activeScope,workCategory:scopeWorkCats[0],project:proj,name:`${instLabel(instTab)}ที่ ${tabList.length+1}`,description:"",amount:"",dueDate:""}); setShowInstForm(true); }}>
+                + เพิ่ม{instLabel(instTab)} ({scopeLabel(activeScope)})
               </button>
 
-              {tabList.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"48px 0",fontSize:14 }}>ยังไม่มี{instLabel(instTab)}สำหรับโครงการนี้</div>
+              {tabList.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"48px 0",fontSize:14 }}>ยังไม่มี{instLabel(instTab)}ของ{scopeLabel(activeScope)}ในโครงการนี้</div>
               :tabList.map(inst=>{
                 const days=daysUntil(inst.dueDate);
                 const isUrgent=days<=7&&days>=0&&inst.status==="pending";
@@ -1228,6 +1305,9 @@ export default function App() {
                       <span className={`badge badge-${done?"received":"pending"}`}>
                         {done?`✅ ${instDoneLabel(inst.kind)}`:`⏳ ${instPendingLabel(inst.kind)}`}
                       </span>
+                    </div>
+                    <div style={{ marginBottom:6 }}>
+                      <span className="tag">{inst.workCategory}</span>
                     </div>
                     {inst.description&&(
                       <div style={{ fontSize:12,color:"#555",marginBottom:6,padding:"6px 10px",background:"#fafbff",borderRadius:8,whiteSpace:"pre-wrap",lineHeight:1.4 }}>{inst.description}</div>
@@ -1258,33 +1338,27 @@ export default function App() {
                         ?<button className="btn btn-green" onClick={()=>toggleInstallment(inst)} style={{ flex:1,fontSize:13,padding:8 }}>✅ {instDoneLabel(inst.kind)}</button>
                         :<button className="btn btn-ghost" onClick={()=>toggleInstallment(inst)} style={{ flex:1,fontSize:13,padding:8 }}>↩️ ยกเลิก</button>
                       }
-                      <button className="btn btn-red" onClick={()=>deleteInstallment(inst.id)} style={{ flex:1,fontSize:13,padding:8 }}>🗑️ ลบ</button>
+                      <button className="btn btn-red" onClick={()=>setDeleteInstId(inst.id)} style={{ flex:1,fontSize:13,padding:8 }}>🗑️ ลบ</button>
                     </div>
                   </div>
                 );
               })}
 
-              {/* Statement section — collapsible per project */}
+              {/* Statement section — collapsible per scope */}
               {(()=>{
-                const stmtKey = `stmt:${proj}`;
+                const stmtKey = `stmt:${proj}:${activeScope}`;
                 const stmtCollapsed = !!collapsedGroups[stmtKey];
-                type StmtRow = { id: string; date: string; category: string; description: string; amount: number; source: "entry"|"installment"; entry?: Entry };
+                type StmtRow = { id: string; date: string; category: string; description: string; amount: number };
                 const recvDone = projInst.filter(i=>i.kind==="receivable"&&i.status==="received");
                 const payDone  = projInst.filter(i=>i.kind==="payable"&&i.status==="paid");
                 const incRows: StmtRow[] = recvDone.map(i=>({
                   id: `i${i.id}`, date: i.completedDate || i.dueDate,
-                  category: "งวดเบิก", description: i.name, amount: i.amount, source: "installment" as const,
+                  category: i.workCategory, description: i.name, amount: i.amount,
                 })).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-                const expRows: StmtRow[] = [
-                  ...payDone.map(i=>({
-                    id: `i${i.id}`, date: i.completedDate || i.dueDate,
-                    category: "งวดจ่าย", description: i.name, amount: i.amount, source: "installment" as const,
-                  })),
-                  ...projExpenseEntries.map(e=>({
-                    id: `e${e.id}`, date: String(e.date), category: e.category,
-                    description: e.description, amount: e.amount, source: "entry" as const, entry: e,
-                  })),
-                ].sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+                const expRows: StmtRow[] = payDone.map(i=>({
+                  id: `i${i.id}`, date: i.completedDate || i.dueDate,
+                  category: i.workCategory, description: i.name, amount: i.amount,
+                })).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
                 const totalRows = incRows.length + expRows.length;
                 return (
                   <div className="card" style={{ padding:0,overflow:"hidden",marginTop:4 }}>
@@ -1292,7 +1366,7 @@ export default function App() {
                       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8 }}>
                         <span style={{ fontWeight:800,fontSize:15,color:"#1a1a2e",display:"flex",alignItems:"center",gap:6 }}>
                           <span style={{ display:"inline-block",transform:stmtCollapsed?"rotate(-90deg)":"rotate(0)",transition:"transform .15s",color:"#1565c0",fontSize:12 }}>▼</span>
-                          📑 Statement (รายการทั้งหมด)
+                          📑 Statement — {scopeLabel(activeScope)}
                         </span>
                         <span style={{ fontSize:11,color:"#888",fontWeight:600 }}>{totalRows} รายการ</span>
                       </div>
@@ -1325,12 +1399,6 @@ export default function App() {
                                   <div style={{ fontSize:10,color:"#999" }}>{fmtDate(String(r.date).slice(0,10))} · {r.category}</div>
                                   <div style={{ fontSize:12,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:1 }}>{r.description}</div>
                                   <div style={{ fontSize:13,fontWeight:800,color,marginTop:2 }}>{isInc?"+":"-"}฿{fmt(r.amount)}</div>
-                                  {r.source==="entry"&&r.entry&&(
-                                    <div style={{ display:"flex",gap:6,marginTop:6 }}>
-                                      <button className="btn btn-ghost" onClick={()=>openEdit(r.entry!)} style={{ flex:1,fontSize:11,padding:"4px 6px" }}>✏️ แก้</button>
-                                      <button className="btn btn-red" onClick={()=>setDeleteId(r.entry!.id)} style={{ flex:1,fontSize:11,padding:"4px 6px" }}>🗑️ ลบ</button>
-                                    </div>
-                                  )}
                                 </div>
                               ))}
                             </div>
@@ -1631,8 +1699,16 @@ export default function App() {
         <div className="modal-bg" onClick={()=>setShowInstForm(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
-            <div style={{ fontWeight:800,fontSize:18,marginBottom:20 }}>📆 เพิ่ม{instLabel(instForm.kind)}</div>
+            <div style={{ fontWeight:800,fontSize:18,marginBottom:20 }}>📆 เพิ่ม{instLabel(instForm.kind)} — {scopeLabel(instForm.scope)}</div>
             <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+              <div>
+                <label style={{ fontSize:12,color:"#aaa",fontWeight:700,display:"block",marginBottom:6 }}>หมวดงาน</label>
+                <div style={{ display:"flex",borderRadius:12,overflow:"hidden",border:"1.5px solid #e0e4f0" }}>
+                  {SCOPES.map(s=>(
+                    <button key={s.v} onClick={()=>setInstForm(f=>({...f,scope:s.v,workCategory:WORK_CATS_BY_SCOPE[s.v][0]}))} style={{ flex:1,padding:12,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,background:instForm.scope===s.v?"#1565c0":"transparent",color:instForm.scope===s.v?"#fff":"#bbb" }}>{s.icon} {s.l}</button>
+                  ))}
+                </div>
+              </div>
               <div>
                 <label style={{ fontSize:12,color:"#aaa",fontWeight:700,display:"block",marginBottom:6 }}>ประเภทงวด</label>
                 <div style={{ display:"flex",borderRadius:12,overflow:"hidden",border:"1.5px solid #e0e4f0" }}>
@@ -1646,6 +1722,7 @@ export default function App() {
               </div>
               {[
                 {label:"โครงการ",el:<select value={instForm.project} onChange={e=>setInstForm(f=>({...f,project:e.target.value}))}>{projects.map(p=><option key={p}>{p}</option>)}</select>},
+                {label:"หมวดงาน (Work category)",el:<select value={instForm.workCategory} onChange={e=>setInstForm(f=>({...f,workCategory:e.target.value}))}>{WORK_CATS_BY_SCOPE[instForm.scope].map(c=><option key={c}>{c}</option>)}</select>},
                 {label:"ชื่องวด เช่น งวดที่ 1",el:<input type="text" placeholder="งวดที่ 1" value={instForm.name} onChange={e=>setInstForm(f=>({...f,name:e.target.value}))}/>},
                 {label:"รายละเอียด (จะใช้แสดงในใบวางบิล/ใบเสร็จ)",el:<textarea placeholder={instForm.kind==="payable"?"เช่น งานก่อสร้างฐานราก งวดที่ 1":"เช่น ค่าจ้างออกแบบและควบคุมงาน งวดที่ 1"} value={instForm.description} onChange={e=>setInstForm(f=>({...f,description:e.target.value}))} rows={3} style={{ resize:"vertical",minHeight:80,lineHeight:1.5 }}/>},
                 {label:"ยอดเงินงวด (บาท)",el:<input type="number" inputMode="decimal" placeholder="0.00" value={instForm.amount} onChange={e=>setInstForm(f=>({...f,amount:e.target.value}))}/>},
@@ -1824,8 +1901,8 @@ export default function App() {
 
       {/* TAX PROPAGATE CONFIRM */}
       {pendingTaxPropagate&&(()=>{
-        const { name, next } = pendingTaxPropagate;
-        const affected = installments.filter(i=>i.project===name).length;
+        const { name, scope, next } = pendingTaxPropagate;
+        const affected = installments.filter(i=>i.project===name&&i.scope===scope).length;
         return (
           <div className="modal-bg" onClick={()=>setPendingTaxPropagate(null)}>
             <div className="modal" onClick={e=>e.stopPropagation()}>
@@ -1833,7 +1910,7 @@ export default function App() {
               <div style={{ fontSize:36,textAlign:"center",marginBottom:10 }}>🧾</div>
               <div style={{ fontWeight:800,fontSize:17,textAlign:"center",marginBottom:8 }}>อัปเดตงวดที่มีอยู่แล้วด้วยไหม?</div>
               <div style={{ color:"#666",textAlign:"center",marginBottom:14,fontSize:14 }}>
-                คุณเพิ่งเปลี่ยนภาษีของโครงการ <b>{name}</b> มีงวดเดิม <b>{affected}</b> งวด
+                คุณเพิ่งเปลี่ยนภาษีของ <b>{scopeLabel(scope)}</b> ในโครงการ <b>{name}</b> มีงวดเดิมในหมวดนี้ <b>{affected}</b> งวด
               </div>
               <div style={{ background:"#f8f9ff",borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:13 }}>
                 <div>VAT 7%: <b style={{ color:next.hasVat?"#2e7d32":"#999" }}>{next.hasVat?"เปิด ✓":"ปิด"}</b></div>
@@ -1841,7 +1918,7 @@ export default function App() {
               </div>
               <div style={{ display:"flex",gap:10 }}>
                 <button className="btn btn-ghost" onClick={()=>setPendingTaxPropagate(null)} style={{ flex:1,padding:13 }}>ไม่ — ใช้กับงวดใหม่เท่านั้น</button>
-                <button className="btn btn-primary" onClick={()=>{ propagateTaxToInstallments(name, next); setPendingTaxPropagate(null); showToast("อัปเดตภาษีของงวดเก่าแล้ว"); }} style={{ flex:1,padding:13 }}>ใช่ — อัปเดตทั้งหมด</button>
+                <button className="btn btn-primary" onClick={()=>{ propagateTaxToInstallments(name, scope, next); setPendingTaxPropagate(null); showToast("อัปเดตภาษีของงวดเก่าแล้ว"); }} style={{ flex:1,padding:13 }}>ใช่ — อัปเดตทั้งหมด</button>
               </div>
             </div>
           </div>
@@ -1865,6 +1942,35 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* DELETE INSTALLMENT CONFIRM */}
+      {deleteInstId!==null&&(()=>{
+        const inst = installments.find(i=>i.id===deleteInstId);
+        if (!inst) return null;
+        return (
+          <div className="modal-bg" onClick={()=>setDeleteInstId(null)}>
+            <div className="modal" onClick={e=>e.stopPropagation()}>
+              <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+              <div style={{ fontSize:36,textAlign:"center",marginBottom:10 }}>🗑️</div>
+              <div style={{ fontWeight:800,fontSize:17,textAlign:"center",marginBottom:8 }}>ยืนยันการลบ{instLabel(inst.kind)}</div>
+              <div style={{ color:"#666",textAlign:"center",marginBottom:6,fontSize:14 }}>
+                <b>{inst.name}</b>
+              </div>
+              <div style={{ color:"#888",textAlign:"center",marginBottom:14,fontSize:13 }}>
+                📁 {inst.project} · {scopeLabel(inst.scope)} · {inst.workCategory}<br/>
+                {inst.kind==="payable"?"-":"+"}฿{fmt(inst.amount)} · 📅 {fmtDate(inst.dueDate)}
+              </div>
+              <div style={{ background:"#fff3e0",border:"1px solid #ffcc80",borderRadius:8,padding:"8px 12px",marginBottom:16,fontSize:12,color:"#bf360c" }}>
+                ⚠️ การลบจะถาวร ไม่สามารถย้อนกลับได้
+              </div>
+              <div style={{ display:"flex",gap:10 }}>
+                <button className="btn btn-ghost" onClick={()=>setDeleteInstId(null)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
+                <button className="btn btn-red" onClick={()=>{ deleteInstallment(inst.id); setDeleteInstId(null); }} style={{ flex:1,padding:13,fontSize:14 }}>ลบ{instLabel(inst.kind)}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* DELETE PROJECT CONFIRM (two-step) */}
       {deleteProj&&(()=>{
