@@ -892,42 +892,6 @@ export default function App() {
     </div>
   );
 
-  // PIN gate — block app until correct PIN entered (CEO only)
-  if (!authenticated) return (
-    <div style={{ display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"100vh",fontFamily:"'Sarabun','Noto Sans Thai',sans-serif",background:"linear-gradient(135deg,#0d47a1,#1565c0)",padding:24 }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0}`}</style>
-      <div style={{ background:"#fff",borderRadius:24,padding:"36px 28px",width:"100%",maxWidth:380,boxShadow:"0 20px 60px rgba(0,0,0,.3)" }}>
-        <div style={{ width:140,height:50,margin:"0 auto 8px",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center" }}>
-          <img src="/logo.jpg" alt="Wadfun" style={{ width:"360%",height:"auto",objectFit:"contain",marginLeft:"-15%" }}/>
-        </div>
-        <div style={{ textAlign:"center",fontSize:13,color:"#888",marginBottom:24 }}>Finance · ระบบบัญชี (CEO Access)</div>
-        <div style={{ textAlign:"center",fontSize:30,marginBottom:8 }}>🔒</div>
-        <div style={{ textAlign:"center",fontWeight:800,fontSize:16,marginBottom:6 }}>กรอก PIN เพื่อเข้าใช้งาน</div>
-        <div style={{ textAlign:"center",fontSize:12,color:"#aaa",marginBottom:20 }}>เฉพาะ CEO เท่านั้น</div>
-        <form onSubmit={async (e)=>{
-          e.preventDefault();
-          const ok = await verifyPin(pinInput);
-          if (ok) { sessionStorage.setItem("wf_authed","1"); setAuthenticated(true); setPinInput(""); setPinError(null); }
-          else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
-        }}>
-          <input
-            type="password"
-            inputMode="numeric"
-            autoFocus
-            maxLength={6}
-            placeholder="• • • •"
-            value={pinInput}
-            onChange={e=>{ setPinInput(e.target.value.replace(/\D/g,"")); setPinError(null); }}
-            style={{ width:"100%",padding:"16px 18px",fontSize:24,letterSpacing:"0.4em",textAlign:"center",border:`2px solid ${pinError?"#c62828":"#e0e4f0"}`,borderRadius:14,outline:"none",fontFamily:"inherit",background:"#f8f9ff" }}
-          />
-          {pinError&&<div style={{ color:"#c62828",fontSize:13,textAlign:"center",marginTop:10,fontWeight:600 }}>⚠️ {pinError}</div>}
-          <button type="submit" disabled={pinInput.length<4} style={{ width:"100%",marginTop:20,padding:14,fontSize:15,fontWeight:700,fontFamily:"inherit",background:pinInput.length<4?"#bbb":"#1565c0",color:"#fff",border:"none",borderRadius:12,cursor:pinInput.length<4?"not-allowed":"pointer" }}>เข้าใช้งาน</button>
-        </form>
-      </div>
-      <div style={{ color:"rgba(255,255,255,.6)",fontSize:11,marginTop:18 }}>Wadfun Studio © {new Date().getFullYear()}</div>
-    </div>
-  );
-
   return (
     <div style={{ fontFamily:"'Sarabun','Noto Sans Thai',sans-serif",background:"#f4f6fb",minHeight:"100vh",color:"#1a1a2e" }}>
       <style>{`
@@ -969,9 +933,7 @@ export default function App() {
         <div style={{ maxWidth:900,margin:"0 auto",padding:"0 16px" }}>
           <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",height:64 }}>
             <div style={{ display:"flex",alignItems:"center",gap:12 }}>
-              <div style={{ width:120,height:44,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center" }}>
-                <img src="/logo.jpg" alt="Wadfun" style={{ width:"360%",height:"auto",objectFit:"contain",marginLeft:"-15%" }}/>
-              </div>
+              <img src="/logo-cropped.jpg" alt="Wadfun" style={{ height:36,width:"auto",display:"block" }}/>
               <div style={{ borderLeft:"1px solid #eee",paddingLeft:12 }}>
                 <div style={{ fontWeight:700,fontSize:13,color:"#1a1a2e" }}>Finance</div>
                 <div style={{ fontSize:10,color:"#bbb" }}>ระบบบัญชีรายรับ-รายจ่าย</div>
@@ -989,8 +951,38 @@ export default function App() {
 
       <div style={{ maxWidth:900,margin:"0 auto",padding:"20px 16px 140px" }}>
 
+        {/* DASHBOARD — PIN required for CEO access */}
+        {view==="dashboard"&&!authenticated&&(
+          <div className="card" style={{ padding:"36px 24px",maxWidth:420,margin:"40px auto",textAlign:"center" }}>
+            <img src="/logo-cropped.jpg" alt="Wadfun" style={{ height:40,width:"auto",display:"block",margin:"0 auto 14px" }}/>
+            <div style={{ fontSize:30,marginBottom:6 }}>🔒</div>
+            <div style={{ fontWeight:800,fontSize:17,marginBottom:6 }}>หน้าภาพรวม — เฉพาะ CEO</div>
+            <div style={{ fontSize:12,color:"#888",marginBottom:22 }}>กรอก PIN เพื่อดูข้อมูลสรุปและภาษี</div>
+            <form onSubmit={async (e)=>{
+              e.preventDefault();
+              const ok = await verifyPin(pinInput);
+              if (ok) { sessionStorage.setItem("wf_authed","1"); setAuthenticated(true); setPinInput(""); setPinError(null); }
+              else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
+            }}>
+              <input
+                type="password"
+                inputMode="numeric"
+                autoFocus
+                maxLength={6}
+                placeholder="• • • •"
+                value={pinInput}
+                onChange={e=>{ setPinInput(e.target.value.replace(/\D/g,"")); setPinError(null); }}
+                style={{ width:"100%",padding:"16px 18px",fontSize:24,letterSpacing:"0.4em",textAlign:"center",border:`2px solid ${pinError?"#c62828":"#e0e4f0"}`,borderRadius:14,outline:"none",fontFamily:"inherit",background:"#f8f9ff" }}
+              />
+              {pinError&&<div style={{ color:"#c62828",fontSize:13,marginTop:10,fontWeight:600 }}>⚠️ {pinError}</div>}
+              <button type="submit" disabled={pinInput.length<4} style={{ width:"100%",marginTop:16,padding:14,fontSize:15,fontWeight:700,fontFamily:"inherit",background:pinInput.length<4?"#bbb":"#1565c0",color:"#fff",border:"none",borderRadius:12,cursor:pinInput.length<4?"not-allowed":"pointer" }}>ดูหน้าภาพรวม</button>
+            </form>
+            <div style={{ marginTop:16,fontSize:11,color:"#aaa" }}>คุณสามารถดูแท็บอื่นได้โดยไม่ต้องใส่ PIN</div>
+          </div>
+        )}
+
         {/* DASHBOARD */}
-        {view==="dashboard"&&(
+        {view==="dashboard"&&authenticated&&(
           <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
             {/* Google Sheet setup notice */}
             {!sheetSetupDismissed&&(
