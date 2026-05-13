@@ -1170,16 +1170,19 @@ export default function App() {
     setSaving(false);
   }
 
-  // Real cash movement: income = received receivable installments only
-  // Expense = paid payable installments + expense entries logged in projects
+  // Real cash movement (3-way split):
+  //   Direct project cost = paid payable installments
+  //   Project overhead   = paid overhead entries with kind=project
+  //   Staff overhead     = paid overhead entries with kind=staff
+  //   Legacy entries     = expense entries NOT in OVERHEAD_CATS (those are migrated to overheads)
   const totalIncome = useMemo(()=>installments.filter(i=>i.status==="received").reduce((s,i)=>s+i.amount,0),[installments]);
-  const totalExpense = useMemo(()=>{
-    const paidInst = installments.filter(i=>i.status==="paid").reduce((s,i)=>s+i.amount,0);
-    const expEntries = entries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
-    return paidInst + expEntries;
-  },[installments, entries]);
-  const totalOverhead = useMemo(()=>entries.filter(e=>e.type==="expense"&&isOverhead(e.category)).reduce((s,e)=>s+e.amount,0),[entries]);
-  const totalProjectExpense = totalExpense - totalOverhead;
+  const directProjectCost = useMemo(()=>installments.filter(i=>i.kind==="payable"&&i.status==="paid").reduce((s,i)=>s+i.amount,0),[installments]);
+  const projectOverhead = useMemo(()=>overheads.filter(o=>o.kind==="project"&&o.status==="paid").reduce((s,o)=>s+o.amount,0),[overheads]);
+  const staffOverhead = useMemo(()=>overheads.filter(o=>o.kind==="staff"&&o.status==="paid").reduce((s,o)=>s+o.amount,0),[overheads]);
+  const legacyExpense = useMemo(()=>entries.filter(e=>e.type==="expense"&&!OVERHEAD_CATS.has(e.category)).reduce((s,e)=>s+e.amount,0),[entries]);
+  const totalExpense = directProjectCost + projectOverhead + staffOverhead + legacyExpense;
+  const totalOverhead = projectOverhead + staffOverhead;
+  const totalProjectExpense = directProjectCost + projectOverhead; // ของกินใจโครงการ (รวม project overhead ใน per-project)
   const overheadPct = totalIncome > 0 ? (totalOverhead/totalIncome)*100 : 0;
   const net = totalIncome - totalExpense;
 
@@ -1195,8 +1198,11 @@ export default function App() {
       if (inst.status === "received") bucket(inst.completedDate || inst.dueDate).inflow += inst.amount;
       else if (inst.status === "paid") bucket(inst.completedDate || inst.dueDate).outflow += inst.amount;
     });
-    entries.filter(e=>e.type==="expense").forEach(e=>{
+    entries.filter(e=>e.type==="expense"&&!OVERHEAD_CATS.has(e.category)).forEach(e=>{
       bucket(String(e.date)).outflow += e.amount;
+    });
+    overheads.filter(o=>o.status==="paid").forEach(o=>{
+      bucket(String(o.paidDate || o.date)).outflow += o.amount;
     });
     const list = Object.entries(map).sort(([a],[b])=>a.localeCompare(b));
     let cumulative = 0;
@@ -1205,7 +1211,7 @@ export default function App() {
       cumulative += n;
       return { month, inflow:v.inflow, outflow:v.outflow, net:n, cumulative };
     });
-  },[entries, installments]);
+  },[entries, installments, overheads]);
 
   // Per-month tax remittance: VAT net + WHT to remit to Revenue Department for each month
   const monthlyTax = useMemo(()=>{
@@ -1226,10 +1232,17 @@ export default function App() {
         b.inputVat += vat; b.whtRemit += wht;
       }
     });
-    entries.filter(e=>e.type==="expense").forEach(e=>{
+    // Legacy expense entries (those not in OVERHEAD_CATS — overhead ones moved to OverheadEntry)
+    entries.filter(e=>e.type==="expense"&&!OVERHEAD_CATS.has(e.category)).forEach(e=>{
       const b = bucket(String(e.date));
       b.inputVat += e.vat || 0;
       b.whtRemit += e.wht || 0;
+    });
+    // Paid overhead entries (project + staff) — including WHT from salary
+    overheads.filter(o=>o.status==="paid").forEach(o=>{
+      const b = bucket(String(o.paidDate || o.date));
+      b.inputVat += o.vat || 0;
+      b.whtRemit += o.wht || 0;
     });
     return Object.entries(map)
       .map(([month,v])=>{
@@ -1239,7 +1252,7 @@ export default function App() {
         return { month, ...v, vatNet, vatRemit, totalRemit };
       })
       .sort((a,b)=>a.month.localeCompare(b.month));
-  },[entries, installments]);
+  },[entries, installments, overheads]);
 
   // All-time tax breakdown split by side — derived from real cash movements
   const taxBreakdown = useMemo(()=>{
@@ -1250,15 +1263,19 @@ export default function App() {
       if (i.status === "received") { outputVat += vat; whtCredit += wht; }
       else if (i.status === "paid") { inputVat += vat; whtRemit += wht; }
     });
-    entries.filter(e=>e.type==="expense").forEach(e=>{
+    entries.filter(e=>e.type==="expense"&&!OVERHEAD_CATS.has(e.category)).forEach(e=>{
       inputVat += e.vat || 0;
       whtRemit += e.wht || 0;
+    });
+    overheads.filter(o=>o.status==="paid").forEach(o=>{
+      inputVat += o.vat || 0;
+      whtRemit += o.wht || 0;
     });
     return {
       outputVat, inputVat, vatNet: outputVat - inputVat,
       whtCredit, whtRemit, whtNet: whtRemit - whtCredit,
     };
-  },[entries, installments]);
+  },[entries, installments, overheads]);
 
   // VAT due based on 15th-of-next-month filing rule (Output - Input for target month)
   const vatDueInfo = useMemo(()=>{
@@ -1282,16 +1299,20 @@ export default function App() {
       if (i.status === "received") { outputVat += vat; whtCredit += wht; }
       else if (i.status === "paid") { inputVat += vat; whtRemit += wht; }
     });
-    entries.filter(e=>e.type==="expense"&&String(e.date).slice(0,7)===monthStr).forEach(e=>{
+    entries.filter(e=>e.type==="expense"&&!OVERHEAD_CATS.has(e.category)&&String(e.date).slice(0,7)===monthStr).forEach(e=>{
       inputVat += e.vat || 0;
       whtRemit += e.wht || 0;
+    });
+    overheads.filter(o=>o.status==="paid"&&String(o.paidDate||o.date).slice(0,7)===monthStr).forEach(o=>{
+      inputVat += o.vat || 0;
+      whtRemit += o.wht || 0;
     });
     const vatNet = outputVat - inputVat;
     const vatRemit = Math.max(0, vatNet); // negative = refundable, no remit due
     const totalRemit = vatRemit + whtRemit;
     const daysToDue = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
     return { monthStr, dueDate, daysToDue, outputVat, inputVat, vatNet, vatRemit, whtCredit, whtRemit, totalRemit, isDueToday: day===15 };
-  },[entries, installments]);
+  },[entries, installments, overheads]);
 
   // Near-due / overdue payables (3-day window)
   const urgentPayables = useMemo(()=>installments.filter(i=>i.kind==="payable"&&i.status==="pending"&&daysUntil(i.dueDate)<=3),[installments]);
@@ -1595,23 +1616,32 @@ export default function App() {
               ))}
             </div>
 
-            {/* Expense breakdown: project vs overhead */}
+            {/* Expense breakdown: 3-way split (Direct / Project OH / Staff OH) */}
             <div className="card" style={{ padding:16 }}>
               <div className="stitle" style={{ marginBottom:12 }}>ค่าใช้จ่ายแยกประเภท</div>
-              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
-                <div style={{ background:"#fce4ec",borderRadius:10,padding:12 }}>
-                  <div style={{ fontSize:11,color:"#880e4f",marginBottom:3,fontWeight:600 }}>🏗️ ค่าโครงการ</div>
-                  <div style={{ fontSize:16,fontWeight:800,color:"#880e4f" }}>฿{fmt(totalProjectExpense)}</div>
-                  <div style={{ fontSize:10,color:"#aaa",marginTop:2 }}>{totalExpense>0?((totalProjectExpense/totalExpense)*100).toFixed(1):"0.0"}% ของรายจ่ายรวม</div>
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8 }}>
+                <div style={{ background:"linear-gradient(135deg,#fce4ec,#fff1f6)",borderRadius:10,padding:11 }}>
+                  <div style={{ fontSize:10,color:"#880e4f",marginBottom:3,fontWeight:700 }}>🏗️ Direct</div>
+                  <div className="num" style={{ fontSize:14,fontWeight:800,color:"#880e4f" }}>฿{fmt(directProjectCost)}</div>
+                  <div style={{ fontSize:9,color:"#aaa",marginTop:2 }}>{totalExpense>0?((directProjectCost/totalExpense)*100).toFixed(0):"0"}%</div>
                 </div>
-                <div style={{ background:"#ede7f6",borderRadius:10,padding:12 }}>
-                  <div style={{ fontSize:11,color:"#4527a0",marginBottom:3,fontWeight:600 }}>🏢 Overhead</div>
-                  <div style={{ fontSize:16,fontWeight:800,color:"#4527a0" }}>฿{fmt(totalOverhead)}</div>
-                  <div style={{ fontSize:10,color:"#aaa",marginTop:2 }}>{overheadPct.toFixed(2)}% ของรายรับ</div>
+                <div style={{ background:"linear-gradient(135deg,#fef3c7,#fffbeb)",borderRadius:10,padding:11 }}>
+                  <div style={{ fontSize:10,color:"#b45309",marginBottom:3,fontWeight:700 }}>📊 Project OH</div>
+                  <div className="num" style={{ fontSize:14,fontWeight:800,color:"#b45309" }}>฿{fmt(projectOverhead)}</div>
+                  <div style={{ fontSize:9,color:"#aaa",marginTop:2 }}>{totalExpense>0?((projectOverhead/totalExpense)*100).toFixed(0):"0"}%</div>
+                </div>
+                <div style={{ background:"linear-gradient(135deg,#ede7f6,#f3effa)",borderRadius:10,padding:11 }}>
+                  <div style={{ fontSize:10,color:"#4527a0",marginBottom:3,fontWeight:700 }}>🏢 Staff OH</div>
+                  <div className="num" style={{ fontSize:14,fontWeight:800,color:"#4527a0" }}>฿{fmt(staffOverhead)}</div>
+                  <div style={{ fontSize:9,color:"#aaa",marginTop:2 }}>{totalExpense>0?((staffOverhead/totalExpense)*100).toFixed(0):"0"}%</div>
                 </div>
               </div>
+              <div style={{ marginTop:10,padding:"8px 10px",background:"#f8fafc",borderRadius:8,fontSize:11,color:"#64748b",display:"flex",justifyContent:"space-between" }}>
+                <span>Overhead รวม / รายรับ</span>
+                <b style={{ color:overheadPct>30?"#dc2626":"#475569" }}>{overheadPct.toFixed(1)}%</b>
+              </div>
               {overheadPct>30&&totalIncome>0&&(
-                <div style={{ marginTop:10,fontSize:11,color:"#c62828",fontWeight:600 }}>⚠️ Overhead สูงเกิน 30% ของรายรับ</div>
+                <div style={{ marginTop:8,fontSize:11,color:"#dc2626",fontWeight:600 }}>⚠️ Overhead สูงเกิน 30% ของรายรับ</div>
               )}
             </div>
 
@@ -1630,17 +1660,18 @@ export default function App() {
               ) : (()=>{
                 const rows = projects.map(p=>{
                   const projInst = installments.filter(i=>i.project===p);
-                  const projExpEntries = entries.filter(e=>e.project===p&&e.type==="expense");
+                  const projExpEntries = entries.filter(e=>e.project===p&&e.type==="expense"&&!OVERHEAD_CATS.has(e.category));
+                  const projOh = overheads.filter(o=>o.kind==="project"&&o.project===p&&o.status==="paid").reduce((s,o)=>s+o.amount,0);
                   const designInc = projInst.filter(i=>i.scope==="design"&&i.kind==="receivable"&&i.status==="received").reduce((s,i)=>s+i.amount,0);
                   const designExp = projInst.filter(i=>i.scope==="design"&&i.kind==="payable"&&i.status==="paid").reduce((s,i)=>s+i.amount,0);
                   const constInc = projInst.filter(i=>i.scope==="construction"&&i.kind==="receivable"&&i.status==="received").reduce((s,i)=>s+i.amount,0);
                   const constExp = projInst.filter(i=>i.scope==="construction"&&i.kind==="payable"&&i.status==="paid").reduce((s,i)=>s+i.amount,0);
                   const legacyExp = projExpEntries.reduce((s,e)=>s+e.amount,0);
                   const inc = designInc + constInc;
-                  const exp = designExp + constExp + legacyExp;
+                  const exp = designExp + constExp + legacyExp + projOh;
                   const n = inc - exp;
                   const m = inc>0 ? (n/inc)*100 : 0;
-                  return { p, inc, exp, n, m, designInc, designExp, designNet: designInc-designExp, constInc, constExp, constNet: constInc-constExp };
+                  return { p, inc, exp, n, m, projOh, designInc, designExp, designNet: designInc-designExp, constInc, constExp, constNet: constInc-constExp };
                 }).filter(r=>r.inc>0||r.exp>0)
                   .sort((a,b)=>b.n - a.n);
                 if (rows.length===0) return <div style={{ color:"#bbb",textAlign:"center",padding:"24px 0",fontSize:14 }}>ยังไม่มีงวดที่รับ/จ่ายแล้ว</div>;
@@ -1655,6 +1686,7 @@ export default function App() {
                         <div style={{ display:"flex",gap:14,marginTop:6,fontSize:12,flexWrap:"wrap" }}>
                           <span style={{ color:"#2e7d32" }}>↑ รับ ฿{fmt(r.inc)}</span>
                           <span style={{ color:"#c62828" }}>↓ จ่าย ฿{fmt(r.exp)}</span>
+                          {r.projOh>0&&<span style={{ color:"#b45309",fontSize:11 }}>📊 ฿{fmt(r.projOh)}</span>}
                           <span style={{ color:"#888",marginLeft:"auto" }}>Margin <b style={{ color:r.m>=0?"#2e7d32":"#c62828" }}>{r.m.toFixed(1)}%</b></span>
                         </div>
                         <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginTop:10 }}>
