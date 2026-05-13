@@ -453,8 +453,8 @@ export default function App() {
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState<string|null>(null);
   const [showChangePin, setShowChangePin] = useState(false);
-  const [pinChange, setPinChange] = useState<{ step:"old"|"new"|"verify"; oldPin:string; newPin:string; confirmPin:string; code:string; pendingHash:string; codeSent:boolean; codeExpires:number; codeInput:string }>(
-    { step:"old", oldPin:"", newPin:"", confirmPin:"", code:"", pendingHash:"", codeSent:false, codeExpires:0, codeInput:"" }
+  const [pinChange, setPinChange] = useState<{ step:"old"|"new"|"verify"; oldPin:string; newPin:string; confirmPin:string; code:string; pendingHash:string; codeSent:boolean; codeExpires:number; codeInput:string; lastError:string }>(
+    { step:"old", oldPin:"", newPin:"", confirmPin:"", code:"", pendingHash:"", codeSent:false, codeExpires:0, codeInput:"", lastError:"" }
   );
   const [showTaxSummary, setShowTaxSummary] = useState(false);
   const [notifGranted, setNotifGranted] = useState(false);
@@ -1798,16 +1798,41 @@ export default function App() {
 
             <div className="card" style={{ padding:18 }}>
               <div className="stitle" style={{ marginBottom:14 }}>🔒 ความปลอดภัย</div>
-              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
-                <div style={{ flex:1 }}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:"1px solid #f0f0f0",gap:10 }}>
+                <div style={{ flex:1,minWidth:0 }}>
                   <div style={{ fontSize:14,fontWeight:600 }}>PIN เข้าใช้งาน</div>
                   <div style={{ fontSize:11,color:"#888",marginTop:2 }}>เปลี่ยน PIN ต้องยืนยันผ่านอีเมล {PIN_NOTIFY_EMAIL}</div>
                 </div>
                 <button
                   className="btn btn-outline"
-                  onClick={()=>{ setPinChange({ step:"old",oldPin:"",newPin:"",confirmPin:"",code:"",pendingHash:"",codeSent:false,codeExpires:0,codeInput:"" }); setShowChangePin(true); }}
-                  style={{ fontSize:13,padding:"8px 14px" }}
+                  onClick={()=>{ setPinChange({ step:"old",oldPin:"",newPin:"",confirmPin:"",code:"",pendingHash:"",codeSent:false,codeExpires:0,codeInput:"",lastError:"" }); setShowChangePin(true); }}
+                  style={{ fontSize:13,padding:"8px 14px",whiteSpace:"nowrap" }}
                 >เปลี่ยน PIN</button>
+              </div>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:"1px solid #f0f0f0",gap:10 }}>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ fontSize:14,fontWeight:600 }}>🧪 ทดสอบส่งอีเมล</div>
+                  <div style={{ fontSize:11,color:"#888",marginTop:2 }}>ส่งโค้ดทดสอบไปยัง {PIN_NOTIFY_EMAIL} เพื่อตรวจสอบ Apps Script</div>
+                </div>
+                <button
+                  className="btn btn-ghost"
+                  disabled={saving}
+                  onClick={async()=>{
+                    setSaving(true);
+                    try {
+                      const testCode = genCode6();
+                      const res = await apiPost("notifyPinChange", { code: testCode, email: PIN_NOTIFY_EMAIL, ts: new Date().toISOString() });
+                      console.log("[test email] response:", res);
+                      if (res && res.ok) showToast(`ส่งทดสอบสำเร็จ — เช็คอีเมล (โค้ด ${testCode})`);
+                      else showToast("ส่งล้มเหลว: "+(res&&res.error?res.error:"ตรวจสอบ Apps Script"),"err");
+                    } catch (e) {
+                      console.error("[test email] error:", e);
+                      showToast("ติดต่อ Apps Script ไม่ได้ (ตรวจ console)","err");
+                    }
+                    setSaving(false);
+                  }}
+                  style={{ fontSize:13,padding:"8px 14px",whiteSpace:"nowrap" }}
+                >{saving?"...":"🧪 ทดสอบ"}</button>
               </div>
               <div style={{ padding:"12px 0",fontSize:11,color:"#888",lineHeight:1.5 }}>
                 🔒 PIN จะถูกล็อกอัตโนมัติทุกครั้งที่ออกจากแท็บ "ภาพรวม" — เข้าครั้งถัดไปต้องกรอกใหม่
@@ -2359,20 +2384,37 @@ export default function App() {
                     const pendingHash = await sha256Hex(pinChange.newPin);
                     const expires = Date.now() + 5*60*1000;
                     setSaving(true);
+                    setPinChange(p=>({...p,lastError:""}));
                     try {
                       const res = await apiPost("notifyPinChange", { code, email: PIN_NOTIFY_EMAIL, ts: new Date().toISOString() });
+                      console.log("[notifyPinChange] response:", res);
                       if (res && res.ok) {
-                        setPinChange(p=>({...p,step:"verify",code,pendingHash,codeSent:true,codeExpires:expires,codeInput:""}));
+                        setPinChange(p=>({...p,step:"verify",code,pendingHash,codeSent:true,codeExpires:expires,codeInput:"",lastError:""}));
                         showToast("ส่งโค้ดยืนยันไปทางอีเมลแล้ว");
                       } else {
-                        showToast("ส่งอีเมลไม่สำเร็จ: "+(res&&res.error?res.error:"ตรวจสอบ Apps Script"),"err");
+                        const errMsg = res && res.error ? String(res.error) : "Apps Script ไม่ตอบกลับตามคาด";
+                        setPinChange(p=>({...p,lastError:errMsg}));
                       }
-                    } catch {
-                      showToast("ส่งอีเมลไม่สำเร็จ — ตรวจการ deploy Apps Script","err");
+                    } catch (e) {
+                      console.error("[notifyPinChange] error:", e);
+                      setPinChange(p=>({...p,lastError:"เรียก Apps Script ไม่สำเร็จ (network/CORS)"}));
                     }
                     setSaving(false);
                   }} style={{ flex:2,padding:13 }}>{saving?"กำลังส่ง...":"ส่งโค้ดยืนยัน"}</button>
                 </div>
+                {pinChange.lastError&&(
+                  <div style={{ background:"#ffebee",border:"1.5px solid #ef9a9a",borderRadius:10,padding:"10px 12px",fontSize:12,color:"#c62828",lineHeight:1.5 }}>
+                    ⚠️ <b>ส่งอีเมลไม่สำเร็จ</b>: {pinChange.lastError}
+                    <div style={{ marginTop:6,paddingTop:6,borderTop:"1px dashed #ef9a9a",color:"#666",fontSize:11 }}>
+                      <b>วิธีแก้:</b><br/>
+                      1. เปิด Google Sheet → Extensions → Apps Script<br/>
+                      2. Copy <code style={{ background:"#fff",padding:"1px 4px",borderRadius:3 }}>Code.gs</code> ล่าสุดจาก repo มาวางทับ<br/>
+                      3. คลิกเลือก function <code style={{ background:"#fff",padding:"1px 4px",borderRadius:3 }}>notifyPinChange</code> ในเมนู → กด ▶ Run<br/>
+                      4. ถ้ามี popup ขอสิทธิ์ Gmail → กด Allow<br/>
+                      5. Deploy → Manage deployments → ดินสอแก้ → Version: New version → Deploy
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
