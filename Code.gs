@@ -140,16 +140,44 @@ function deleteProject(name) {
   return { ok: false };
 }
 
+/**
+ * Send a one-time PIN-change confirmation code to the configured email.
+ * Body: { code: "123456", email: "a.athiwat29@gmail.com", ts: "ISO8601" }
+ * The frontend generates the code; the server only relays it via MailApp.
+ */
+function notifyPinChange(body) {
+  if (!body || !body.code) return { ok: false, error: "missing code" };
+  const to = body.email || "a.athiwat29@gmail.com";
+  const code = String(body.code);
+  if (!/^\d{4,8}$/.test(code)) return { ok: false, error: "invalid code format" };
+  const when = body.ts ? new Date(body.ts) : new Date();
+  const whenStr = Utilities.formatDate(when, "Asia/Bangkok", "yyyy-MM-dd HH:mm:ss");
+  const subject = "Wadfun Finance - PIN Change Confirmation Code";
+  const text =
+    "Wadfun Finance — PIN Change Confirmation\n\n" +
+    "Your confirmation code: " + code + "\n\n" +
+    "This code expires in 5 minutes.\n" +
+    "Requested at (Asia/Bangkok): " + whenStr + "\n\n" +
+    "If you did not request this change, ignore this email and consider changing your PIN.\n";
+  try {
+    MailApp.sendEmail({ to: to, subject: subject, body: text });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
 function _route(action, params, body) {
   switch (action) {
-    case "getAll":        return getAll();
-    case "getProjects":   return getProjects();
-    case "addEntry":      return addEntry(body || {});
-    case "updateEntry":   return updateEntry(body || {});
-    case "deleteEntry":   return deleteEntry(params.id);
-    case "addProject":    return addProject(params.name);
-    case "deleteProject": return deleteProject(params.name);
-    default:              return { ok: false, error: "unknown action: " + action };
+    case "getAll":           return getAll();
+    case "getProjects":      return getProjects();
+    case "addEntry":         return addEntry(body || {});
+    case "updateEntry":      return updateEntry(body || {});
+    case "deleteEntry":      return deleteEntry(params.id);
+    case "addProject":       return addProject(params.name);
+    case "deleteProject":    return deleteProject(params.name);
+    case "notifyPinChange":  return notifyPinChange(body || {});
+    default:                 return { ok: false, error: "unknown action: " + action };
   }
 }
 

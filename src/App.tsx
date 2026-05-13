@@ -26,6 +26,41 @@ function formatThousand(s: string): string {
 }
 function parseThousand(s: string): string { return s.replace(/,/g, ""); }
 
+// PIN gate (CEO-only access) — initial PIN 1202, hash stored in localStorage
+const DEFAULT_PIN = "1202";
+const PIN_HASH_KEY = "wf_pin_hash";
+const PIN_NOTIFY_EMAIL = "a.athiwat29@gmail.com";
+
+async function sha256Hex(input: string): Promise<string> {
+  const enc = new TextEncoder().encode(input);
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function getStoredPinHash(): Promise<string> {
+  let hash = localStorage.getItem(PIN_HASH_KEY);
+  if (!hash) {
+    hash = await sha256Hex(DEFAULT_PIN);
+    localStorage.setItem(PIN_HASH_KEY, hash);
+  }
+  return hash;
+}
+
+async function verifyPin(input: string): Promise<boolean> {
+  const stored = await getStoredPinHash();
+  const inputHash = await sha256Hex(input);
+  return inputHash === stored;
+}
+
+async function setPinHash(newPin: string) {
+  const h = await sha256Hex(newPin);
+  localStorage.setItem(PIN_HASH_KEY, h);
+}
+
+function genCode6(): string {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
 // Thai number-to-words (baht)
 function bahtText(num: number): string {
   const digits = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
@@ -401,6 +436,13 @@ export default function App() {
   const [instTab, setInstTab] = useState<InstKind>("receivable");
   const [activeScope, setActiveScope] = useState<InstScope>("design");
   const [deleteInstId, setDeleteInstId] = useState<number|null>(null);
+  const [authenticated, setAuthenticated] = useState<boolean>(()=>sessionStorage.getItem("wf_authed")==="1");
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState<string|null>(null);
+  const [showChangePin, setShowChangePin] = useState(false);
+  const [pinChange, setPinChange] = useState<{ step:"old"|"new"|"verify"; oldPin:string; newPin:string; confirmPin:string; code:string; pendingHash:string; codeSent:boolean; codeExpires:number; codeInput:string }>(
+    { step:"old", oldPin:"", newPin:"", confirmPin:"", code:"", pendingHash:"", codeSent:false, codeExpires:0, codeInput:"" }
+  );
   const [showTaxSummary, setShowTaxSummary] = useState(false);
   const [notifGranted, setNotifGranted] = useState(false);
   const [selectedProject, setSelectedProject] = useState<string|null>(null);
@@ -850,6 +892,42 @@ export default function App() {
     </div>
   );
 
+  // PIN gate — block app until correct PIN entered (CEO only)
+  if (!authenticated) return (
+    <div style={{ display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:"100vh",fontFamily:"'Sarabun','Noto Sans Thai',sans-serif",background:"linear-gradient(135deg,#0d47a1,#1565c0)",padding:24 }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700;800&display=swap');*{box-sizing:border-box;margin:0;padding:0}`}</style>
+      <div style={{ background:"#fff",borderRadius:24,padding:"36px 28px",width:"100%",maxWidth:380,boxShadow:"0 20px 60px rgba(0,0,0,.3)" }}>
+        <div style={{ width:140,height:50,margin:"0 auto 8px",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center" }}>
+          <img src="/logo.jpg" alt="Wadfun" style={{ width:"360%",height:"auto",objectFit:"contain",marginLeft:"-15%" }}/>
+        </div>
+        <div style={{ textAlign:"center",fontSize:13,color:"#888",marginBottom:24 }}>Finance · ระบบบัญชี (CEO Access)</div>
+        <div style={{ textAlign:"center",fontSize:30,marginBottom:8 }}>🔒</div>
+        <div style={{ textAlign:"center",fontWeight:800,fontSize:16,marginBottom:6 }}>กรอก PIN เพื่อเข้าใช้งาน</div>
+        <div style={{ textAlign:"center",fontSize:12,color:"#aaa",marginBottom:20 }}>เฉพาะ CEO เท่านั้น</div>
+        <form onSubmit={async (e)=>{
+          e.preventDefault();
+          const ok = await verifyPin(pinInput);
+          if (ok) { sessionStorage.setItem("wf_authed","1"); setAuthenticated(true); setPinInput(""); setPinError(null); }
+          else { setPinError("PIN ไม่ถูกต้อง"); setPinInput(""); }
+        }}>
+          <input
+            type="password"
+            inputMode="numeric"
+            autoFocus
+            maxLength={6}
+            placeholder="• • • •"
+            value={pinInput}
+            onChange={e=>{ setPinInput(e.target.value.replace(/\D/g,"")); setPinError(null); }}
+            style={{ width:"100%",padding:"16px 18px",fontSize:24,letterSpacing:"0.4em",textAlign:"center",border:`2px solid ${pinError?"#c62828":"#e0e4f0"}`,borderRadius:14,outline:"none",fontFamily:"inherit",background:"#f8f9ff" }}
+          />
+          {pinError&&<div style={{ color:"#c62828",fontSize:13,textAlign:"center",marginTop:10,fontWeight:600 }}>⚠️ {pinError}</div>}
+          <button type="submit" disabled={pinInput.length<4} style={{ width:"100%",marginTop:20,padding:14,fontSize:15,fontWeight:700,fontFamily:"inherit",background:pinInput.length<4?"#bbb":"#1565c0",color:"#fff",border:"none",borderRadius:12,cursor:pinInput.length<4?"not-allowed":"pointer" }}>เข้าใช้งาน</button>
+        </form>
+      </div>
+      <div style={{ color:"rgba(255,255,255,.6)",fontSize:11,marginTop:18 }}>Wadfun Studio © {new Date().getFullYear()}</div>
+    </div>
+  );
+
   return (
     <div style={{ fontFamily:"'Sarabun','Noto Sans Thai',sans-serif",background:"#f4f6fb",minHeight:"100vh",color:"#1a1a2e" }}>
       <style>{`
@@ -889,11 +967,13 @@ export default function App() {
       {/* HEADER */}
       <div style={{ background:"#fff",borderBottom:"1px solid #eee",position:"sticky",top:0,zIndex:100 }}>
         <div style={{ maxWidth:900,margin:"0 auto",padding:"0 16px" }}>
-          <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",height:58 }}>
-            <div style={{ display:"flex",alignItems:"center",gap:10 }}>
-              <div style={{ width:36,height:36,background:"linear-gradient(135deg,#1565c0,#42a5f5)",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18 }}>🏗️</div>
-              <div>
-                <div style={{ fontWeight:800,fontSize:15 }}>Wadfun Finance</div>
+          <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",height:64 }}>
+            <div style={{ display:"flex",alignItems:"center",gap:12 }}>
+              <div style={{ width:120,height:44,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center" }}>
+                <img src="/logo.jpg" alt="Wadfun" style={{ width:"360%",height:"auto",objectFit:"contain",marginLeft:"-15%" }}/>
+              </div>
+              <div style={{ borderLeft:"1px solid #eee",paddingLeft:12 }}>
+                <div style={{ fontWeight:700,fontSize:13,color:"#1a1a2e" }}>Finance</div>
                 <div style={{ fontSize:10,color:"#bbb" }}>ระบบบัญชีรายรับ-รายจ่าย</div>
               </div>
             </div>
@@ -1034,53 +1114,6 @@ export default function App() {
               </div>
             </div>
 
-            <div className="card" style={{ padding:20 }}>
-              <div className="stitle">สัดส่วนรายรับ-รายจ่าย</div>
-              <Donut income={totalIncome} expense={totalExpense}/>
-            </div>
-
-            {/* Cash Flow table — historical from entries */}
-            <div className="card" style={{ padding:20 }}>
-              <div className="stitle">💧 กระแสเงินสดรายเดือน (ย้อนหลัง)</div>
-              <div style={{ fontSize:11,color:"#aaa",marginTop:-8,marginBottom:12 }}>ข้อมูลจริงจากรายการรายรับ-รายจ่าย</div>
-              {monthlyCashflow.length===0?(
-                <div style={{ color:"#bbb",fontSize:13,textAlign:"center",padding:"16px 0" }}>ยังไม่มีข้อมูล</div>
-              ):(
-                <div style={{ overflowX:"auto",marginTop:6 }}>
-                  <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:480 }}>
-                    <thead>
-                      <tr style={{ borderBottom:"2px solid #e0e4f0" }}>
-                        <th style={{ textAlign:"left",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>เดือน</th>
-                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#2e7d32",fontSize:11,fontWeight:700 }}>เงินเข้า</th>
-                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#c62828",fontSize:11,fontWeight:700 }}>เงินออก</th>
-                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>สุทธิ</th>
-                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>คงเหลือสะสม</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {monthlyCashflow.slice(-12).map(r=>{
-                        const [y,m] = r.month.split("-");
-                        const label = new Date(+y,+m-1).toLocaleDateString("th-TH",{month:"short",year:"2-digit"});
-                        const negRow = r.net<0;
-                        return (
-                          <tr key={r.month} style={{ background:negRow?"#ffebee":"transparent",borderBottom:"1px solid #f5f5f5" }}>
-                            <td style={{ padding:"10px 6px",fontWeight:600 }}>{label}</td>
-                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#2e7d32",fontWeight:600 }}>+฿{fmt(r.inflow)}</td>
-                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#c62828",fontWeight:600 }}>-฿{fmt(r.outflow)}</td>
-                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:800,color:negRow?"#c62828":"#2e7d32" }}>{negRow?"":"+"}฿{fmt(r.net)}</td>
-                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:700,color:r.cumulative<0?"#c62828":"#1565c0" }}>฿{fmt(r.cumulative)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {monthlyCashflow.some(r=>r.net<0)&&(
-                <div style={{ marginTop:8,fontSize:11,color:"#c62828",fontWeight:600 }}>⚠️ มีเดือนที่เงินติดลบ — ตรวจสอบการบริหารกระแสเงินสด</div>
-              )}
-            </div>
-
             {/* Monthly tax remittance to Revenue Department */}
             <div className="card" style={{ padding:20 }}>
               <div className="stitle">🧾 ภาษีต้องนำส่งสรรพากร (รายเดือน)</div>
@@ -1140,6 +1173,53 @@ export default function App() {
                 • <b>WHT นำส่ง</b> = ภาษีหัก ณ ที่จ่าย ที่หักผู้รับเงิน ต้องนำส่งสรรพากรภายในวันที่ 7 เดือนถัดไป<br/>
                 • <b>รวมนำส่ง</b> = ยอดที่ต้องโอนให้สรรพากรเดือนนั้น (กำหนดยื่น VAT วันที่ 15 ของเดือนถัดไป)
               </div>
+            </div>
+
+            <div className="card" style={{ padding:20 }}>
+              <div className="stitle">สัดส่วนรายรับ-รายจ่าย</div>
+              <Donut income={totalIncome} expense={totalExpense}/>
+            </div>
+
+            {/* Cash Flow table — historical from entries */}
+            <div className="card" style={{ padding:20 }}>
+              <div className="stitle">💧 กระแสเงินสดรายเดือน (ย้อนหลัง)</div>
+              <div style={{ fontSize:11,color:"#aaa",marginTop:-8,marginBottom:12 }}>ข้อมูลจริงจากรายการรายรับ-รายจ่าย</div>
+              {monthlyCashflow.length===0?(
+                <div style={{ color:"#bbb",fontSize:13,textAlign:"center",padding:"16px 0" }}>ยังไม่มีข้อมูล</div>
+              ):(
+                <div style={{ overflowX:"auto",marginTop:6 }}>
+                  <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:480 }}>
+                    <thead>
+                      <tr style={{ borderBottom:"2px solid #e0e4f0" }}>
+                        <th style={{ textAlign:"left",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>เดือน</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#2e7d32",fontSize:11,fontWeight:700 }}>เงินเข้า</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#c62828",fontSize:11,fontWeight:700 }}>เงินออก</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>สุทธิ</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>คงเหลือสะสม</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthlyCashflow.slice(-12).map(r=>{
+                        const [y,m] = r.month.split("-");
+                        const label = new Date(+y,+m-1).toLocaleDateString("th-TH",{month:"short",year:"2-digit"});
+                        const negRow = r.net<0;
+                        return (
+                          <tr key={r.month} style={{ background:negRow?"#ffebee":"transparent",borderBottom:"1px solid #f5f5f5" }}>
+                            <td style={{ padding:"10px 6px",fontWeight:600 }}>{label}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#2e7d32",fontWeight:600 }}>+฿{fmt(r.inflow)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#c62828",fontWeight:600 }}>-฿{fmt(r.outflow)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:800,color:negRow?"#c62828":"#2e7d32" }}>{negRow?"":"+"}฿{fmt(r.net)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:700,color:r.cumulative<0?"#c62828":"#1565c0" }}>฿{fmt(r.cumulative)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {monthlyCashflow.some(r=>r.net<0)&&(
+                <div style={{ marginTop:8,fontSize:11,color:"#c62828",fontWeight:600 }}>⚠️ มีเดือนที่เงินติดลบ — ตรวจสอบการบริหารกระแสเงินสด</div>
+              )}
             </div>
 
             {/* Cash Flow Forecast — 3 months ahead from pending installments */}
@@ -1609,6 +1689,32 @@ export default function App() {
               </div>
             </div>
 
+            <div className="card" style={{ padding:18 }}>
+              <div className="stitle" style={{ marginBottom:14 }}>🔒 ความปลอดภัย</div>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:14,fontWeight:600 }}>PIN เข้าใช้งาน</div>
+                  <div style={{ fontSize:11,color:"#888",marginTop:2 }}>เปลี่ยน PIN ต้องยืนยันผ่านอีเมล {PIN_NOTIFY_EMAIL}</div>
+                </div>
+                <button
+                  className="btn btn-outline"
+                  onClick={()=>{ setPinChange({ step:"old",oldPin:"",newPin:"",confirmPin:"",code:"",pendingHash:"",codeSent:false,codeExpires:0,codeInput:"" }); setShowChangePin(true); }}
+                  style={{ fontSize:13,padding:"8px 14px" }}
+                >เปลี่ยน PIN</button>
+              </div>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0" }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:14,fontWeight:600 }}>ล็อก / ออกจากระบบ</div>
+                  <div style={{ fontSize:11,color:"#888",marginTop:2 }}>ต้องกรอก PIN ใหม่ในครั้งถัดไป</div>
+                </div>
+                <button
+                  className="btn btn-ghost"
+                  onClick={()=>{ sessionStorage.removeItem("wf_authed"); setAuthenticated(false); }}
+                  style={{ fontSize:13,padding:"8px 14px" }}
+                >🚪 ออก</button>
+              </div>
+            </div>
+
             <div style={{ background:"#fff5f5",border:"2px solid #ef9a9a",borderRadius:14,padding:18 }}>
               <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:6 }}>
                 <span style={{ fontSize:20 }}>⚠️</span>
@@ -2046,6 +2152,99 @@ export default function App() {
                 {saving?"กำลังลบ...":"ลบรายการ"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* CHANGE PIN MODAL */}
+      {showChangePin&&(
+        <div className="modal-bg" onClick={()=>setShowChangePin(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+            <div style={{ fontSize:32,textAlign:"center",marginBottom:6 }}>🔒</div>
+            <div style={{ fontWeight:800,fontSize:18,textAlign:"center",marginBottom:6 }}>เปลี่ยน PIN เข้าใช้งาน</div>
+            <div style={{ fontSize:12,color:"#888",textAlign:"center",marginBottom:18 }}>ขั้นตอนที่ {pinChange.step==="old"?1:pinChange.step==="new"?2:3} / 3</div>
+
+            {pinChange.step==="old"&&(
+              <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+                <label style={{ fontSize:13,fontWeight:600,color:"#666" }}>PIN ปัจจุบัน</label>
+                <input type="password" inputMode="numeric" autoFocus maxLength={6} placeholder="• • • •" value={pinChange.oldPin}
+                  onChange={e=>setPinChange(p=>({...p,oldPin:e.target.value.replace(/\D/g,"")}))}
+                  style={{ padding:"14px 16px",fontSize:20,letterSpacing:"0.3em",textAlign:"center" }}/>
+                <div style={{ display:"flex",gap:10,marginTop:6 }}>
+                  <button className="btn btn-ghost" onClick={()=>setShowChangePin(false)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
+                  <button className="btn btn-primary" disabled={pinChange.oldPin.length<4} onClick={async()=>{
+                    const ok = await verifyPin(pinChange.oldPin);
+                    if (!ok) { showToast("PIN ปัจจุบันไม่ถูกต้อง","err"); return; }
+                    setPinChange(p=>({...p,step:"new"}));
+                  }} style={{ flex:2,padding:13 }}>ถัดไป</button>
+                </div>
+              </div>
+            )}
+
+            {pinChange.step==="new"&&(
+              <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+                <label style={{ fontSize:13,fontWeight:600,color:"#666" }}>PIN ใหม่ (4-6 หลัก)</label>
+                <input type="password" inputMode="numeric" autoFocus maxLength={6} placeholder="• • • •" value={pinChange.newPin}
+                  onChange={e=>setPinChange(p=>({...p,newPin:e.target.value.replace(/\D/g,"")}))}
+                  style={{ padding:"14px 16px",fontSize:20,letterSpacing:"0.3em",textAlign:"center" }}/>
+                <label style={{ fontSize:13,fontWeight:600,color:"#666" }}>ยืนยัน PIN ใหม่</label>
+                <input type="password" inputMode="numeric" maxLength={6} placeholder="• • • •" value={pinChange.confirmPin}
+                  onChange={e=>setPinChange(p=>({...p,confirmPin:e.target.value.replace(/\D/g,"")}))}
+                  style={{ padding:"14px 16px",fontSize:20,letterSpacing:"0.3em",textAlign:"center" }}/>
+                <div style={{ fontSize:11,color:"#777",lineHeight:1.5,background:"#f8f9ff",padding:"8px 12px",borderRadius:8 }}>
+                  ระบบจะส่งโค้ดยืนยัน 6 หลักไปที่ <b>{PIN_NOTIFY_EMAIL}</b> ก่อนเปลี่ยน PIN
+                </div>
+                <div style={{ display:"flex",gap:10,marginTop:6 }}>
+                  <button className="btn btn-ghost" onClick={()=>setPinChange(p=>({...p,step:"old"}))} style={{ flex:1,padding:13 }}>← ย้อน</button>
+                  <button className="btn btn-primary" disabled={pinChange.newPin.length<4||pinChange.newPin!==pinChange.confirmPin||saving} onClick={async()=>{
+                    if (pinChange.newPin.length<4) { showToast("PIN ใหม่อย่างน้อย 4 หลัก","err"); return; }
+                    if (pinChange.newPin!==pinChange.confirmPin) { showToast("PIN ไม่ตรงกัน","err"); return; }
+                    const code = genCode6();
+                    const pendingHash = await sha256Hex(pinChange.newPin);
+                    const expires = Date.now() + 5*60*1000;
+                    setSaving(true);
+                    try {
+                      const res = await apiPost("notifyPinChange", { code, email: PIN_NOTIFY_EMAIL, ts: new Date().toISOString() });
+                      if (res && res.ok) {
+                        setPinChange(p=>({...p,step:"verify",code,pendingHash,codeSent:true,codeExpires:expires,codeInput:""}));
+                        showToast("ส่งโค้ดยืนยันไปทางอีเมลแล้ว");
+                      } else {
+                        showToast("ส่งอีเมลไม่สำเร็จ: "+(res&&res.error?res.error:"ตรวจสอบ Apps Script"),"err");
+                      }
+                    } catch {
+                      showToast("ส่งอีเมลไม่สำเร็จ — ตรวจการ deploy Apps Script","err");
+                    }
+                    setSaving(false);
+                  }} style={{ flex:2,padding:13 }}>{saving?"กำลังส่ง...":"ส่งโค้ดยืนยัน"}</button>
+                </div>
+              </div>
+            )}
+
+            {pinChange.step==="verify"&&(
+              <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+                <div style={{ fontSize:13,color:"#666",textAlign:"center",lineHeight:1.6 }}>
+                  ส่งโค้ดยืนยันไปที่<br/><b>{PIN_NOTIFY_EMAIL}</b>
+                </div>
+                <label style={{ fontSize:13,fontWeight:600,color:"#666" }}>กรอกโค้ด 6 หลักจากอีเมล</label>
+                <input type="text" inputMode="numeric" autoFocus maxLength={6} placeholder="••••••" value={pinChange.codeInput}
+                  onChange={e=>setPinChange(p=>({...p,codeInput:e.target.value.replace(/\D/g,"")}))}
+                  style={{ padding:"14px 16px",fontSize:22,letterSpacing:"0.4em",textAlign:"center" }}/>
+                <div style={{ fontSize:11,color:"#888",textAlign:"center" }}>
+                  โค้ดจะหมดอายุภายใน 5 นาที — {(()=>{ const remain = Math.max(0, Math.ceil((pinChange.codeExpires - Date.now())/1000)); return `${Math.floor(remain/60)}:${String(remain%60).padStart(2,"0")}`; })()}
+                </div>
+                <div style={{ display:"flex",gap:10,marginTop:6 }}>
+                  <button className="btn btn-ghost" onClick={()=>setPinChange(p=>({...p,step:"new"}))} style={{ flex:1,padding:13 }}>← ย้อน</button>
+                  <button className="btn btn-primary" disabled={pinChange.codeInput.length<6} onClick={async()=>{
+                    if (Date.now() > pinChange.codeExpires) { showToast("โค้ดหมดอายุ — ส่งใหม่อีกครั้ง","err"); return; }
+                    if (pinChange.codeInput !== pinChange.code) { showToast("โค้ดไม่ถูกต้อง","err"); return; }
+                    localStorage.setItem(PIN_HASH_KEY, pinChange.pendingHash);
+                    setShowChangePin(false);
+                    showToast("เปลี่ยน PIN สำเร็จ ✅");
+                  }} style={{ flex:2,padding:13 }}>ยืนยันเปลี่ยน PIN</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
