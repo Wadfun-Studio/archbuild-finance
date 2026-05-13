@@ -14,6 +14,18 @@ const fmtDate = (d: string) => { if (!d) return ""; return new Date(d).toLocaleD
 const today = () => new Date().toISOString().slice(0, 10);
 const daysUntil = (d: string) => Math.ceil((new Date(d).getTime() - new Date().getTime()) / 86400000);
 
+// Format a raw numeric string with thousands separators while preserving trailing decimal entry.
+// e.g. "1234"   -> "1,234"
+//      "1234."  -> "1,234."
+//      "1234.5" -> "1,234.5"
+function formatThousand(s: string): string {
+  if (!s) return "";
+  const [intPart = "", decPart] = s.split(".");
+  const formattedInt = intPart ? intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",") : "";
+  return decPart !== undefined ? `${formattedInt}.${decPart}` : formattedInt;
+}
+function parseThousand(s: string): string { return s.replace(/,/g, ""); }
+
 // Thai number-to-words (baht)
 function bahtText(num: number): string {
   const digits = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
@@ -698,6 +710,40 @@ export default function App() {
     });
   },[entries, installments]);
 
+  // Per-month tax remittance: VAT net + WHT to remit to Revenue Department for each month
+  const monthlyTax = useMemo(()=>{
+    const map: Record<string,{outputVat:number;inputVat:number;whtCredit:number;whtRemit:number}> = {};
+    const bucket = (dateStr: string) => {
+      const m = String(dateStr).slice(0,7);
+      if (!map[m]) map[m] = {outputVat:0,inputVat:0,whtCredit:0,whtRemit:0};
+      return map[m];
+    };
+    installments.forEach(i=>{
+      const vat = i.hasVat ? i.amount * VAT_RATE : 0;
+      const wht = i.hasWht ? i.amount * ((i.whtRate ?? 3)/100) : 0;
+      if (i.status === "received") {
+        const b = bucket(i.completedDate || i.dueDate);
+        b.outputVat += vat; b.whtCredit += wht;
+      } else if (i.status === "paid") {
+        const b = bucket(i.completedDate || i.dueDate);
+        b.inputVat += vat; b.whtRemit += wht;
+      }
+    });
+    entries.filter(e=>e.type==="expense").forEach(e=>{
+      const b = bucket(String(e.date));
+      b.inputVat += e.vat || 0;
+      b.whtRemit += e.wht || 0;
+    });
+    return Object.entries(map)
+      .map(([month,v])=>{
+        const vatNet = v.outputVat - v.inputVat;
+        const vatRemit = Math.max(0, vatNet);
+        const totalRemit = vatRemit + v.whtRemit;
+        return { month, ...v, vatNet, vatRemit, totalRemit };
+      })
+      .sort((a,b)=>a.month.localeCompare(b.month));
+  },[entries, installments]);
+
   // All-time tax breakdown split by side — derived from real cash movements
   const taxBreakdown = useMemo(()=>{
     let outputVat = 0, inputVat = 0, whtCredit = 0, whtRemit = 0;
@@ -1033,6 +1079,67 @@ export default function App() {
               {monthlyCashflow.some(r=>r.net<0)&&(
                 <div style={{ marginTop:8,fontSize:11,color:"#c62828",fontWeight:600 }}>⚠️ มีเดือนที่เงินติดลบ — ตรวจสอบการบริหารกระแสเงินสด</div>
               )}
+            </div>
+
+            {/* Monthly tax remittance to Revenue Department */}
+            <div className="card" style={{ padding:20 }}>
+              <div className="stitle">🧾 ภาษีต้องนำส่งสรรพากร (รายเดือน)</div>
+              <div style={{ fontSize:11,color:"#aaa",marginTop:-8,marginBottom:12 }}>VAT สุทธิ (Output - Input) + WHT นำส่ง · คำนวณจากงวดที่รับ/จ่ายแล้ว</div>
+              {monthlyTax.length===0?(
+                <div style={{ color:"#bbb",fontSize:13,textAlign:"center",padding:"16px 0" }}>ยังไม่มีรายการ</div>
+              ):(
+                <div style={{ overflowX:"auto",marginTop:6 }}>
+                  <table style={{ width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:620 }}>
+                    <thead>
+                      <tr style={{ borderBottom:"2px solid #e0e4f0" }}>
+                        <th style={{ textAlign:"left",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>เดือน</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#0d47a1",fontSize:11,fontWeight:700 }}>Output VAT</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#e65100",fontSize:11,fontWeight:700 }}>Input VAT</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#888",fontSize:11,fontWeight:700 }}>VAT สุทธิ</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#c62828",fontSize:11,fontWeight:700 }}>WHT นำส่ง</th>
+                        <th style={{ textAlign:"right",padding:"8px 6px",color:"#b71c1c",fontSize:11,fontWeight:800 }}>รวมนำส่ง</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {monthlyTax.slice(-12).map(r=>{
+                        const [y,m] = r.month.split("-");
+                        const label = new Date(+y,+m-1).toLocaleDateString("th-TH",{month:"short",year:"2-digit"});
+                        const vatNeg = r.vatNet < 0;
+                        const hasRemit = r.totalRemit > 0;
+                        return (
+                          <tr key={r.month} style={{ background:hasRemit?"#fff8e1":"transparent",borderBottom:"1px solid #f5f5f5" }}>
+                            <td style={{ padding:"10px 6px",fontWeight:600 }}>{label}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#0d47a1",fontWeight:600 }}>฿{fmt(r.outputVat)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#e65100",fontWeight:600 }}>฿{fmt(r.inputVat)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:700,color:vatNeg?"#1b5e20":r.vatNet>0?"#bf360c":"#999" }}>
+                              {vatNeg?`ขอคืน ฿${fmt(-r.vatNet)}`:`฿${fmt(r.vatNet)}`}
+                            </td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",color:"#c62828",fontWeight:600 }}>฿{fmt(r.whtRemit)}</td>
+                            <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:800,color:hasRemit?"#b71c1c":"#999",whiteSpace:"nowrap" }}>
+                              ฿{fmt(r.totalRemit)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ borderTop:"2px solid #e0e4f0",background:"#f5f9ff" }}>
+                        <td style={{ padding:"10px 6px",fontWeight:700,fontSize:11,color:"#666" }}>รวม</td>
+                        <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:800,color:"#0d47a1" }}>฿{fmt(monthlyTax.reduce((s,r)=>s+r.outputVat,0))}</td>
+                        <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:800,color:"#e65100" }}>฿{fmt(monthlyTax.reduce((s,r)=>s+r.inputVat,0))}</td>
+                        <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:800,color:"#666" }}>฿{fmt(monthlyTax.reduce((s,r)=>s+r.vatNet,0))}</td>
+                        <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:800,color:"#c62828" }}>฿{fmt(monthlyTax.reduce((s,r)=>s+r.whtRemit,0))}</td>
+                        <td style={{ padding:"10px 6px",textAlign:"right",fontWeight:800,color:"#b71c1c",whiteSpace:"nowrap" }}>฿{fmt(monthlyTax.reduce((s,r)=>s+r.totalRemit,0))}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+              <div style={{ marginTop:10,fontSize:11,color:"#777",lineHeight:1.5 }}>
+                • <b>VAT สุทธิ</b> = Output VAT - Input VAT (ถ้าบวก = นำส่ง, ถ้าลบ = ขอคืน/เครดิตเดือนถัดไป)<br/>
+                • <b>WHT นำส่ง</b> = ภาษีหัก ณ ที่จ่าย ที่หักผู้รับเงิน ต้องนำส่งสรรพากรภายในวันที่ 7 เดือนถัดไป<br/>
+                • <b>รวมนำส่ง</b> = ยอดที่ต้องโอนให้สรรพากรเดือนนั้น (กำหนดยื่น VAT วันที่ 15 ของเดือนถัดไป)
+              </div>
             </div>
 
             {/* Cash Flow Forecast — 3 months ahead from pending installments */}
@@ -1725,7 +1832,7 @@ export default function App() {
                 {label:"หมวดงาน (Work category)",el:<select value={instForm.workCategory} onChange={e=>setInstForm(f=>({...f,workCategory:e.target.value}))}>{WORK_CATS_BY_SCOPE[instForm.scope].map(c=><option key={c}>{c}</option>)}</select>},
                 {label:"ชื่องวด เช่น งวดที่ 1",el:<input type="text" placeholder="งวดที่ 1" value={instForm.name} onChange={e=>setInstForm(f=>({...f,name:e.target.value}))}/>},
                 {label:"รายละเอียด (จะใช้แสดงในใบวางบิล/ใบเสร็จ)",el:<textarea placeholder={instForm.kind==="payable"?"เช่น งานก่อสร้างฐานราก งวดที่ 1":"เช่น ค่าจ้างออกแบบและควบคุมงาน งวดที่ 1"} value={instForm.description} onChange={e=>setInstForm(f=>({...f,description:e.target.value}))} rows={3} style={{ resize:"vertical",minHeight:80,lineHeight:1.5 }}/>},
-                {label:"ยอดเงินงวด (บาท)",el:<input type="number" inputMode="decimal" placeholder="0.00" value={instForm.amount} onChange={e=>setInstForm(f=>({...f,amount:e.target.value}))}/>},
+                {label:"ยอดเงินงวด (บาท)",el:<input type="text" inputMode="decimal" placeholder="0.00" value={formatThousand(instForm.amount)} onChange={e=>{ const raw = parseThousand(e.target.value); if (/^\d*\.?\d*$/.test(raw)) setInstForm(f=>({...f,amount:raw})); }}/>},
                 {label:instForm.kind==="payable"?"วันครบกำหนดจ่าย":"วันครบกำหนดเบิก",el:<input type="date" value={instForm.dueDate} onChange={e=>setInstForm(f=>({...f,dueDate:e.target.value}))}/>},
               ].map(({label,el})=>(
                 <div key={label}>
