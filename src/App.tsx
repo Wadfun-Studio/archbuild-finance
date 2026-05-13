@@ -291,14 +291,14 @@ interface Entry { id: number; date: string; type: string; category: string; proj
 type InstKind = "receivable"|"payable";
 type InstStatus = "pending"|"received"|"paid";
 interface ProjectTaxSettings { hasVat: boolean; hasWht: boolean; whtRate: number; }
-interface Installment { id: number; kind: InstKind; project: string; name: string; description?: string; amount: number; dueDate: string; status: InstStatus; invoiceNo?: string; receiptNo?: string; hasVat?: boolean; hasWht?: boolean; whtRate?: number; }
+interface Installment { id: number; kind: InstKind; project: string; name: string; description?: string; amount: number; dueDate: string; status: InstStatus; completedDate?: string; invoiceNo?: string; receiptNo?: string; hasVat?: boolean; hasWht?: boolean; whtRate?: number; }
 interface FormState { date: string; type: string; category: string; project: string; description: string; amount: string; useVat: boolean; useWht: boolean; }
 interface InstForm { kind: InstKind; project: string; name: string; description: string; amount: string; dueDate: string; }
 
 const defaultTaxSettings: ProjectTaxSettings = { hasVat: false, hasWht: false, whtRate: 3 };
 
 const instLabel = (kind: InstKind) => kind==="payable" ? "งวดจ่าย" : "งวดเบิก";
-const instDoneLabel = (kind: InstKind) => kind==="payable" ? "จ่ายแล้ว" : "รับแล้ว";
+const instDoneLabel = (kind: InstKind) => kind==="payable" ? "จ่ายเงินแล้ว" : "รับเงินแล้ว";
 const instPendingLabel = (kind: InstKind) => kind==="payable" ? "รอจ่าย" : "รอรับ";
 const instDoneStatus = (kind: InstKind): InstStatus => kind==="payable" ? "paid" : "received";
 
@@ -342,11 +342,7 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string|null>(null);
   const [view, setView] = useState("dashboard");
-  const [filterType, setFilterType] = useState("all");
-  const [filterProject, setFilterProject] = useState("all");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [form, setForm] = useState<FormState>({ date:today(), type:"income", category:CATS_IN[0], project:"", description:"", amount:"", useVat:false, useWht:false });
+  const [form, setForm] = useState<FormState>({ date:today(), type:"expense", category:CATS_EX[0], project:"", description:"", amount:"", useVat:false, useWht:false });
   const [editId, setEditId] = useState<number|null>(null);
   const [showForm, setShowForm] = useState(false);
   const [deleteId, setDeleteId] = useState<number|null>(null);
@@ -484,7 +480,9 @@ export default function App() {
 
   function toggleInstallment(inst: Installment) {
     const next: InstStatus = inst.status === "pending" ? instDoneStatus(inst.kind) : "pending";
-    saveInstallments(installments.map(i => i.id === inst.id ? {...i, status: next} : i));
+    saveInstallments(installments.map(i => i.id === inst.id
+      ? {...i, status: next, completedDate: next === "pending" ? undefined : today()}
+      : i));
   }
 
   async function handleInvoice(inst: Installment) {
@@ -520,13 +518,13 @@ export default function App() {
 
   function showToast(msg: string, type="ok") { setToast({msg, type}); setTimeout(()=>setToast(null), 2800); }
 
-  function openAdd(type: "income"|"expense" = "income") {
+  function openAddExpense(projectName: string) {
+    const tax = getProjectTax(projectName);
     setEditId(null);
-    setForm({ date:today(), type, category: type==="income"?CATS_IN[0]:CATS_EX[0], project:projects[0]||"", description:"", amount:"", useVat:false, useWht:false });
+    setForm({ date:today(), type:"expense", category:CATS_EX[0], project: projectName, description:"", amount:"", useVat:tax.hasVat, useWht:tax.hasWht });
     setShowForm(true);
   }
   function openEdit(e: Entry) { setEditId(e.id); setForm({...e, amount:String(e.amount), useVat:!!e.vat, useWht:!!e.wht}); setShowForm(true); }
-  function handleTypeChange(type: string) { setForm(f=>({...f, type, category:type==="income"?CATS_IN[0]:CATS_EX[0]})); }
 
   const calcTax = (amount: number, useVat: boolean, useWht: boolean) => ({
     vat: useVat ? amount * VAT_RATE : 0,
@@ -594,31 +592,33 @@ export default function App() {
     setSaving(false);
   }
 
-  function exportCSV() {
-    const rows=[["วันที่","ประเภท","หมวดหมู่","โครงการ","รายละเอียด","จำนวน","VAT","หัก ณ ที่จ่าย"]];
-    filtered.forEach(e=>rows.push([e.date, e.type==="income"?"รายรับ":"รายจ่าย", e.category, e.project, e.description, String(e.amount), String(e.vat||0), String(e.wht||0)]));
-    const csv="\uFEFF"+rows.map(r=>r.map(c=>`"${c.replace(/"/g,'""')}"`).join(",")).join("\n");
-    const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"}));
-    a.download=`บัญชี_${today()}.csv`; a.click(); showToast("ส่งออก CSV สำเร็จ");
-  }
-
-  const totalIncome = useMemo(()=>entries.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0),[entries]);
-  const totalExpense = useMemo(()=>entries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0),[entries]);
+  // Real cash movement: income = received receivable installments only
+  // Expense = paid payable installments + expense entries logged in projects
+  const totalIncome = useMemo(()=>installments.filter(i=>i.status==="received").reduce((s,i)=>s+i.amount,0),[installments]);
+  const totalExpense = useMemo(()=>{
+    const paidInst = installments.filter(i=>i.status==="paid").reduce((s,i)=>s+i.amount,0);
+    const expEntries = entries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+    return paidInst + expEntries;
+  },[installments, entries]);
   const totalOverhead = useMemo(()=>entries.filter(e=>e.type==="expense"&&isOverhead(e.category)).reduce((s,e)=>s+e.amount,0),[entries]);
   const totalProjectExpense = totalExpense - totalOverhead;
   const overheadPct = totalIncome > 0 ? (totalOverhead/totalIncome)*100 : 0;
-  const totalVat = useMemo(()=>entries.reduce((s,e)=>s+(e.vat||0),0),[entries]);
-  const totalWht = useMemo(()=>entries.reduce((s,e)=>s+(e.wht||0),0),[entries]);
   const net = totalIncome - totalExpense;
 
-  // Monthly cash flow with cumulative balance
+  // Monthly cash flow with cumulative balance — from real cash movements
   const monthlyCashflow = useMemo(()=>{
     const map: Record<string,{inflow:number,outflow:number}> = {};
-    entries.forEach(e=>{
-      const m = String(e.date).slice(0,7);
-      if(!map[m]) map[m] = {inflow:0,outflow:0};
-      if (e.type==="income") map[m].inflow += e.amount;
-      else map[m].outflow += e.amount;
+    const bucket = (dateStr: string) => {
+      const m = String(dateStr).slice(0,7);
+      if (!map[m]) map[m] = {inflow:0, outflow:0};
+      return map[m];
+    };
+    installments.forEach(inst=>{
+      if (inst.status === "received") bucket(inst.completedDate || inst.dueDate).inflow += inst.amount;
+      else if (inst.status === "paid") bucket(inst.completedDate || inst.dueDate).outflow += inst.amount;
+    });
+    entries.filter(e=>e.type==="expense").forEach(e=>{
+      bucket(String(e.date)).outflow += e.amount;
     });
     const list = Object.entries(map).sort(([a],[b])=>a.localeCompare(b));
     let cumulative = 0;
@@ -627,19 +627,26 @@ export default function App() {
       cumulative += n;
       return { month, inflow:v.inflow, outflow:v.outflow, net:n, cumulative };
     });
-  },[entries]);
+  },[entries, installments]);
 
-  // All-time tax breakdown split by side
+  // All-time tax breakdown split by side — derived from real cash movements
   const taxBreakdown = useMemo(()=>{
-    const outputVat = entries.filter(e=>e.type==="income").reduce((s,e)=>s+(e.vat||0),0);
-    const inputVat  = entries.filter(e=>e.type==="expense").reduce((s,e)=>s+(e.vat||0),0);
-    const whtCredit = entries.filter(e=>e.type==="income").reduce((s,e)=>s+(e.wht||0),0);
-    const whtRemit  = entries.filter(e=>e.type==="expense").reduce((s,e)=>s+(e.wht||0),0);
+    let outputVat = 0, inputVat = 0, whtCredit = 0, whtRemit = 0;
+    installments.forEach(i=>{
+      const vat = i.hasVat ? i.amount * VAT_RATE : 0;
+      const wht = i.hasWht ? i.amount * ((i.whtRate ?? 3)/100) : 0;
+      if (i.status === "received") { outputVat += vat; whtCredit += wht; }
+      else if (i.status === "paid") { inputVat += vat; whtRemit += wht; }
+    });
+    entries.filter(e=>e.type==="expense").forEach(e=>{
+      inputVat += e.vat || 0;
+      whtRemit += e.wht || 0;
+    });
     return {
       outputVat, inputVat, vatNet: outputVat - inputVat,
       whtCredit, whtRemit, whtNet: whtRemit - whtCredit,
     };
-  },[entries]);
+  },[entries, installments]);
 
   // VAT due based on 15th-of-next-month filing rule (Output - Input for target month)
   const vatDueInfo = useMemo(()=>{
@@ -654,17 +661,25 @@ export default function App() {
       ? new Date(now.getFullYear(), now.getMonth(), 15)
       : new Date(now.getFullYear(), now.getMonth()+1, 15);
     const monthStr = `${targetMonth.getFullYear()}-${String(targetMonth.getMonth()+1).padStart(2,"0")}`;
-    const mEntries = entries.filter(e=>String(e.date).slice(0,7)===monthStr);
-    const outputVat = mEntries.filter(e=>e.type==="income").reduce((s,e)=>s+(e.vat||0),0);
-    const inputVat  = mEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+(e.vat||0),0);
-    const whtCredit = mEntries.filter(e=>e.type==="income").reduce((s,e)=>s+(e.wht||0),0);
-    const whtRemit  = mEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+(e.wht||0),0);
+    let outputVat = 0, inputVat = 0, whtCredit = 0, whtRemit = 0;
+    installments.forEach(i=>{
+      const dStr = String(i.completedDate || i.dueDate).slice(0,7);
+      if (dStr !== monthStr) return;
+      const vat = i.hasVat ? i.amount * VAT_RATE : 0;
+      const wht = i.hasWht ? i.amount * ((i.whtRate ?? 3)/100) : 0;
+      if (i.status === "received") { outputVat += vat; whtCredit += wht; }
+      else if (i.status === "paid") { inputVat += vat; whtRemit += wht; }
+    });
+    entries.filter(e=>e.type==="expense"&&String(e.date).slice(0,7)===monthStr).forEach(e=>{
+      inputVat += e.vat || 0;
+      whtRemit += e.wht || 0;
+    });
     const vatNet = outputVat - inputVat;
     const vatRemit = Math.max(0, vatNet); // negative = refundable, no remit due
     const totalRemit = vatRemit + whtRemit;
     const daysToDue = Math.ceil((dueDate.getTime() - now.getTime()) / 86400000);
     return { monthStr, dueDate, daysToDue, outputVat, inputVat, vatNet, vatRemit, whtCredit, whtRemit, totalRemit, isDueToday: day===15 };
-  },[entries]);
+  },[entries, installments]);
 
   // Near-due / overdue payables (3-day window)
   const urgentPayables = useMemo(()=>installments.filter(i=>i.kind==="payable"&&i.status==="pending"&&daysUntil(i.dueDate)<=3),[installments]);
@@ -699,23 +714,6 @@ export default function App() {
     });
   }, [notifGranted, notifEnabled, vatDueInfo]);
 
-  const hasUserFilter = filterType!=="all"||filterProject!=="all"||!!dateFrom||!!dateTo;
-  const filtered = useMemo(()=>{
-    const cutoff = new Date(); cutoff.setDate(cutoff.getDate()-5);
-    const cutoffStr = cutoff.toISOString().slice(0,10);
-    return entries.filter(e=>{
-      if (filterType!=="all"&&e.type!==filterType) return false;
-      if (filterProject!=="all"&&e.project!==filterProject) return false;
-      if (dateFrom&&String(e.date).slice(0,10)<dateFrom) return false;
-      if (dateTo&&String(e.date).slice(0,10)>dateTo) return false;
-      // Default window: last 5 days when no user filter is set
-      if (!hasUserFilter && String(e.date).slice(0,10) < cutoffStr) return false;
-      return true;
-    }).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-  },[entries,filterType,filterProject,dateFrom,dateTo,hasUserFilter]);
-
-  const filteredIncome = filtered.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
-  const filteredExpense = filtered.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
   const cats = form.type==="income"?CATS_IN:CATS_EX;
 
   const pendingInst = installments.filter(i=>i.status==="pending");
@@ -1019,128 +1017,33 @@ export default function App() {
             <div className="card" style={{ padding:20 }}>
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14 }}>
                 <div className="stitle" style={{ margin:0 }}>รายการล่าสุด</div>
-                <button className="btn btn-ghost" style={{ fontSize:12,padding:"6px 12px" }} onClick={()=>setView("list")}>ดูทั้งหมด →</button>
+                <span style={{ fontSize:11,color:"#aaa" }}>จากงวดที่รับ/จ่ายเงินแล้ว</span>
               </div>
-              {entries.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"32px 0",fontSize:14 }}>ยังไม่มีรายการ</div>
-              :(()=>{
-                const recent = [...entries].sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,10);
-                const groups: Record<string, Entry[]> = {};
-                recent.forEach(e=>{ const k = e.project || "ไม่ระบุโครงการ"; if(!groups[k]) groups[k]=[]; groups[k].push(e); });
-                // sort groups by most recent entry date desc
-                const groupKeys = Object.keys(groups).sort((a,b)=>String(groups[b][0].date).localeCompare(String(groups[a][0].date)));
-                return groupKeys.map((projName,gIdx)=>{
-                  const list = groups[projName];
-                  const gIncome = list.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
-                  const gExpense = list.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
-                  const gNet = gIncome - gExpense;
-                  const groupKey = `dash:${projName}`;
-                  const collapsed = !!collapsedGroups[groupKey];
+              {(()=>{
+                const completed = installments
+                  .filter(i=>i.status!=="pending")
+                  .map(i=>({ ...i, sortDate: i.completedDate || i.dueDate }))
+                  .sort((a,b)=>String(b.sortDate).localeCompare(String(a.sortDate)))
+                  .slice(0,10);
+                if (completed.length===0) return <div style={{ textAlign:"center",color:"#ccc",padding:"32px 0",fontSize:14 }}>ยังไม่มีงวดที่รับ/จ่ายแล้ว</div>;
+                return completed.map((inst,i)=>{
+                  const isRecv = inst.kind==="receivable";
                   return (
-                    <div key={projName} style={{ marginTop:gIdx===0?0:14 }}>
-                      <button onClick={()=>toggleGroup(groupKey)} aria-expanded={!collapsed} style={{ width:"100%",textAlign:"left",cursor:"pointer",background:"linear-gradient(90deg,#eff3fb,transparent)",border:"none",borderLeft:"4px solid #1565c0",padding:"10px 12px",borderRadius:"8px 8px 0 0",marginBottom:collapsed?0:4,fontFamily:"inherit" }}>
-                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8 }}>
-                          <span style={{ fontWeight:800,fontSize:15,color:"#1a1a2e",display:"flex",alignItems:"center",gap:6 }}>
-                            <span style={{ display:"inline-block",transform:collapsed?"rotate(-90deg)":"rotate(0)",transition:"transform .15s",color:"#1565c0",fontSize:12 }}>▼</span>
-                            📁 {projName}
-                          </span>
-                          <span style={{ fontSize:11,color:"#888",fontWeight:600 }}>{list.length} รายการ</span>
-                        </div>
-                        <div style={{ display:"flex",gap:10,marginTop:4,fontSize:12,flexWrap:"wrap" }}>
-                          <span style={{ color:"#2e7d32",fontWeight:700 }}>↑ ฿{fmt(gIncome)}</span>
-                          <span style={{ color:"#c62828",fontWeight:700 }}>↓ ฿{fmt(gExpense)}</span>
-                          <span style={{ color:gNet>=0?"#1565c0":"#c62828",fontWeight:800,marginLeft:"auto" }}>สุทธิ {gNet>=0?"+":""}฿{fmt(gNet)}</span>
-                        </div>
-                      </button>
-                      {!collapsed&&list.map((e,i)=>(
-                        <div key={e.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderBottom:i<list.length-1?"1px solid #f5f5f5":"none" }}>
-                          <div style={{ width:34,height:34,borderRadius:10,background:e.type==="income"?"#e8f5e9":"#ffebee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0 }}>{e.type==="income"?"↑":"↓"}</div>
-                          <div style={{ flex:1,minWidth:0 }}>
-                            <div style={{ fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{e.description}</div>
-                            <div style={{ fontSize:11,color:"#bbb",marginTop:2 }}>{e.category} · {fmtDate(String(e.date).slice(0,10))}</div>
-                          </div>
-                          <div style={{ textAlign:"right",flexShrink:0 }}>
-                            <div style={{ fontWeight:800,fontSize:14,color:e.type==="income"?"#2e7d32":"#c62828" }}>{e.type==="income"?"+":"-"}฿{fmt(e.amount)}</div>
-                            {(e.vat||e.wht)?<div style={{ fontSize:10,color:"#aaa" }}>{e.vat?`${e.type==="income"?"Out":"In"} VAT ฿${fmt(e.vat)} `:""}{e.wht?`WHT ${e.type==="income"?"เครดิต":"นำส่ง"} ฿${fmt(e.wht)}`:""}</div>:null}
-                          </div>
-                        </div>
-                      ))}
+                    <div key={inst.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderBottom:i<completed.length-1?"1px solid #f5f5f5":"none" }}>
+                      <div style={{ width:34,height:34,borderRadius:10,background:isRecv?"#e8f5e9":"#ffebee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0 }}>{isRecv?"↑":"↓"}</div>
+                      <div style={{ flex:1,minWidth:0 }}>
+                        <div style={{ fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{inst.name}</div>
+                        <div style={{ fontSize:11,color:"#bbb",marginTop:2 }}>📁 {inst.project} · {fmtDate(String(inst.sortDate).slice(0,10))}</div>
+                      </div>
+                      <div style={{ textAlign:"right",flexShrink:0 }}>
+                        <div style={{ fontWeight:800,fontSize:14,color:isRecv?"#2e7d32":"#c62828" }}>{isRecv?"+":"-"}฿{fmt(inst.amount)}</div>
+                        <div style={{ fontSize:10,color:"#aaa" }}>{isRecv?"รับเงินแล้ว":"จ่ายเงินแล้ว"}</div>
+                      </div>
                     </div>
                   );
                 });
               })()}
             </div>
-          </div>
-        )}
-
-        {/* LIST */}
-        {view==="list"&&(
-          <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
-            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
-              <button className="btn btn-green" onClick={()=>openAdd("income")} style={{ padding:14,fontSize:14 }}>💰 + เพิ่มรายรับ</button>
-              <button className="btn btn-red" onClick={()=>openAdd("expense")} style={{ padding:14,fontSize:14 }}>💸 + เพิ่มรายจ่าย</button>
-            </div>
-            <div className="card" style={{ padding:"14px 16px" }}>
-              <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
-                <select value={filterType} onChange={e=>setFilterType(e.target.value)} style={{ flex:1,minWidth:120,fontSize:14 }}>
-                  <option value="all">ทุกประเภท</option><option value="income">รายรับ</option><option value="expense">รายจ่าย</option>
-                </select>
-                <select value={filterProject} onChange={e=>setFilterProject(e.target.value)} style={{ flex:1,minWidth:150,fontSize:14 }}>
-                  <option value="all">ทุกโครงการ</option>{projects.map(p=><option key={p}>{p}</option>)}
-                </select>
-              </div>
-              <div style={{ display:"flex",gap:8,marginTop:8 }}>
-                <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{ flex:1,fontSize:14 }}/>
-                <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{ flex:1,fontSize:14 }}/>
-              </div>
-              <div style={{ display:"flex",gap:8,marginTop:10,alignItems:"center",flexWrap:"wrap" }}>
-                {!hasUserFilter&&<span style={{ fontSize:11,color:"#1565c0",background:"#e3f2fd",padding:"4px 10px",borderRadius:20,fontWeight:600 }}>📅 5 วันล่าสุด</span>}
-                {hasUserFilter&&<button className="btn btn-ghost" style={{ fontSize:12,padding:"7px 12px" }} onClick={()=>{setFilterType("all");setFilterProject("all");setDateFrom("");setDateTo("");}}>✕ ล้าง</button>}
-                <button className="btn btn-outline" style={{ fontSize:12,padding:"7px 12px" }} onClick={exportCSV}>⬇ CSV</button>
-                <span style={{ marginLeft:"auto",fontSize:12,color:"#aaa" }}>{filtered.length} รายการ</span>
-              </div>
-              {filtered.length>0&&(
-                <div style={{ display:"flex",gap:16,marginTop:10,paddingTop:10,borderTop:"1px solid #f0f0f0" }}>
-                  <span style={{ fontSize:12,color:"#2e7d32",fontWeight:700 }}>รับ ฿{fmt(filteredIncome)}</span>
-                  <span style={{ fontSize:12,color:"#c62828",fontWeight:700 }}>จ่าย ฿{fmt(filteredExpense)}</span>
-                  <span style={{ fontSize:12,color:filteredIncome-filteredExpense>=0?"#1565c0":"#c62828",fontWeight:800 }}>
-                    สุทธิ {filteredIncome-filteredExpense>=0?"+":""}฿{fmt(filteredIncome-filteredExpense)}
-                  </span>
-                </div>
-              )}
-            </div>
-            {filtered.length===0?<div style={{ textAlign:"center",color:"#ccc",padding:"48px 0",fontSize:14 }}>{hasUserFilter?"ไม่พบรายการ":"ไม่มีรายการใน 5 วันล่าสุด"}</div>
-            :filtered.map(e=>(
-              <div key={e.id} className="card" style={{ padding:"14px 16px" }}>
-                <div style={{ display:"flex",alignItems:"flex-start",gap:12 }}>
-                  <div style={{ width:40,height:40,borderRadius:12,background:e.type==="income"?"#e8f5e9":"#ffebee",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0 }}>
-                    {e.type==="income"?"↑":"↓"}
-                  </div>
-                  <div style={{ flex:1,minWidth:0 }}>
-                    <div style={{ display:"flex",justifyContent:"space-between",gap:8 }}>
-                      <div style={{ fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1 }}>{e.description}</div>
-                      <div style={{ textAlign:"right",flexShrink:0 }}>
-                        <div style={{ fontWeight:800,fontSize:15,color:e.type==="income"?"#2e7d32":"#c62828" }}>
-                          {e.type==="income"?"+":"-"}฿{fmt(e.amount)}
-                        </div>
-                        {(e.vat||e.wht)&&<div style={{ fontSize:10,color:"#aaa" }}>
-                          {e.vat?`${e.type==="income"?"Out":"In"} VAT ฿${fmt(e.vat)} `:""}{e.wht?`WHT ${e.type==="income"?"เครดิต":"นำส่ง"} ฿${fmt(e.wht)}`:""}
-                        </div>}
-                      </div>
-                    </div>
-                    <div style={{ display:"flex",gap:6,marginTop:5,flexWrap:"wrap" }}>
-                      <span className={`badge badge-${e.type}`}>{e.type==="income"?"รายรับ":"รายจ่าย"}</span>
-                      <span className="tag">{e.category}</span>
-                      <span style={{ fontSize:11,color:"#bbb" }}>{fmtDate(String(e.date).slice(0,10))}</span>
-                    </div>
-                    <div style={{ fontSize:11,color:"#bbb",marginTop:3 }}>📁 {e.project}</div>
-                    <div style={{ display:"flex",gap:8,marginTop:10 }}>
-                      <button className="btn btn-ghost" onClick={()=>openEdit(e)} style={{ flex:1,fontSize:13,padding:8 }}>✏️ แก้ไข</button>
-                      <button className="btn btn-red" onClick={()=>setDeleteId(e.id)} style={{ flex:1,fontSize:13,padding:8 }}>🗑️ ลบ</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
           </div>
         )}
 
@@ -1154,11 +1057,15 @@ export default function App() {
             </div>
           );
           const projEntries = entries.filter(e=>e.project===proj).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-          const pIncome = projEntries.filter(e=>e.type==="income").reduce((s,e)=>s+e.amount,0);
-          const pExpense = projEntries.filter(e=>e.type==="expense").reduce((s,e)=>s+e.amount,0);
+          const projExpenseEntries = projEntries.filter(e=>e.type==="expense");
+          const projInst = installments.filter(i=>i.project===proj);
+          // P&L: real cash movement — received receivables for income, paid payables + expense entries for expense
+          const pIncome = projInst.filter(i=>i.kind==="receivable"&&i.status==="received").reduce((s,i)=>s+i.amount,0);
+          const pExpensePaidInst = projInst.filter(i=>i.kind==="payable"&&i.status==="paid").reduce((s,i)=>s+i.amount,0);
+          const pExpenseEntries = projExpenseEntries.reduce((s,e)=>s+e.amount,0);
+          const pExpense = pExpensePaidInst + pExpenseEntries;
           const pNet = pIncome - pExpense;
           const margin = pIncome>0 ? (pNet/pIncome)*100 : 0;
-          const projInst = installments.filter(i=>i.project===proj);
           const tabList = projInst.filter(i=>i.kind===instTab).sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
           const tabPending = tabList.filter(i=>i.status==="pending");
           const tabDone = tabList.filter(i=>i.status!=="pending");
@@ -1270,6 +1177,11 @@ export default function App() {
                 </div>
               )}
 
+              {/* Log expense for this project */}
+              <button className="btn btn-red" onClick={()=>openAddExpense(proj)} style={{ width:"100%",padding:14,fontSize:15 }}>
+                💸 + บันทึกรายจ่าย
+              </button>
+
               {/* Installment tabs */}
               <div style={{ display:"flex",background:"#fff",borderRadius:12,padding:4,boxShadow:"0 1px 4px rgba(0,0,0,.06)",marginTop:4 }}>
                 {([
@@ -1356,6 +1268,24 @@ export default function App() {
               {(()=>{
                 const stmtKey = `stmt:${proj}`;
                 const stmtCollapsed = !!collapsedGroups[stmtKey];
+                type StmtRow = { id: string; date: string; category: string; description: string; amount: number; source: "entry"|"installment"; entry?: Entry };
+                const recvDone = projInst.filter(i=>i.kind==="receivable"&&i.status==="received");
+                const payDone  = projInst.filter(i=>i.kind==="payable"&&i.status==="paid");
+                const incRows: StmtRow[] = recvDone.map(i=>({
+                  id: `i${i.id}`, date: i.completedDate || i.dueDate,
+                  category: "งวดเบิก", description: i.name, amount: i.amount, source: "installment" as const,
+                })).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+                const expRows: StmtRow[] = [
+                  ...payDone.map(i=>({
+                    id: `i${i.id}`, date: i.completedDate || i.dueDate,
+                    category: "งวดจ่าย", description: i.name, amount: i.amount, source: "installment" as const,
+                  })),
+                  ...projExpenseEntries.map(e=>({
+                    id: `e${e.id}`, date: String(e.date), category: e.category,
+                    description: e.description, amount: e.amount, source: "entry" as const, entry: e,
+                  })),
+                ].sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+                const totalRows = incRows.length + expRows.length;
                 return (
                   <div className="card" style={{ padding:0,overflow:"hidden",marginTop:4 }}>
                     <button onClick={()=>toggleGroup(stmtKey)} aria-expanded={!stmtCollapsed} style={{ width:"100%",textAlign:"left",cursor:"pointer",background:"linear-gradient(90deg,#eff3fb,transparent)",border:"none",borderLeft:"4px solid #1565c0",padding:"14px 16px",fontFamily:"inherit" }}>
@@ -1364,7 +1294,7 @@ export default function App() {
                           <span style={{ display:"inline-block",transform:stmtCollapsed?"rotate(-90deg)":"rotate(0)",transition:"transform .15s",color:"#1565c0",fontSize:12 }}>▼</span>
                           📑 Statement (รายการทั้งหมด)
                         </span>
-                        <span style={{ fontSize:11,color:"#888",fontWeight:600 }}>{projEntries.length} รายการ</span>
+                        <span style={{ fontSize:11,color:"#888",fontWeight:600 }}>{totalRows} รายการ</span>
                       </div>
                       <div style={{ display:"flex",gap:10,marginTop:6,fontSize:12,flexWrap:"wrap" }}>
                         <span style={{ color:"#2e7d32",fontWeight:700 }}>รับ ฿{fmt(pIncome)}</span>
@@ -1373,14 +1303,12 @@ export default function App() {
                       </div>
                     </button>
                     {!stmtCollapsed&&(()=>{
-                      const incList = projEntries.filter(e=>e.type==="income");
-                      const expList = projEntries.filter(e=>e.type==="expense");
-                      if (projEntries.length===0) return (
+                      if (totalRows===0) return (
                         <div style={{ padding:"4px 16px 12px" }}>
                           <div style={{ fontSize:13,color:"#ccc",textAlign:"center",padding:"20px 0" }}>ยังไม่มีรายการในโครงการนี้</div>
                         </div>
                       );
-                      const column = (list: Entry[], total: number, side: "inc"|"exp") => {
+                      const column = (rows: StmtRow[], total: number, side: "inc"|"exp") => {
                         const isInc = side==="inc";
                         const color = isInc ? "#2e7d32" : "#c62828";
                         const bg = isInc ? "#e8f5e9" : "#ffebee";
@@ -1388,15 +1316,21 @@ export default function App() {
                           <div style={{ background:"#fff",borderRadius:10,overflow:"hidden",border:`1px solid ${bg}` }}>
                             <div style={{ background:bg,padding:"8px 10px",fontSize:12,fontWeight:800,color,display:"flex",justifyContent:"space-between" }}>
                               <span>{isInc?"↑ รายรับ":"↓ รายจ่าย"}</span>
-                              <span>{list.length}</span>
+                              <span>{rows.length}</span>
                             </div>
                             <div style={{ padding:"4px 10px",minHeight:60 }}>
-                              {list.length===0?<div style={{ fontSize:11,color:"#ccc",textAlign:"center",padding:"16px 0" }}>—</div>
-                              :list.map((e,i)=>(
-                                <div key={e.id} style={{ padding:"8px 0",borderBottom:i<list.length-1?"1px solid #f5f5f5":"none" }}>
-                                  <div style={{ fontSize:10,color:"#999" }}>{fmtDate(String(e.date).slice(0,10))} · {e.category}</div>
-                                  <div style={{ fontSize:12,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:1 }}>{e.description}</div>
-                                  <div style={{ fontSize:13,fontWeight:800,color,marginTop:2 }}>{isInc?"+":"-"}฿{fmt(e.amount)}</div>
+                              {rows.length===0?<div style={{ fontSize:11,color:"#ccc",textAlign:"center",padding:"16px 0" }}>—</div>
+                              :rows.map((r,i)=>(
+                                <div key={r.id} style={{ padding:"8px 0",borderBottom:i<rows.length-1?"1px solid #f5f5f5":"none" }}>
+                                  <div style={{ fontSize:10,color:"#999" }}>{fmtDate(String(r.date).slice(0,10))} · {r.category}</div>
+                                  <div style={{ fontSize:12,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:1 }}>{r.description}</div>
+                                  <div style={{ fontSize:13,fontWeight:800,color,marginTop:2 }}>{isInc?"+":"-"}฿{fmt(r.amount)}</div>
+                                  {r.source==="entry"&&r.entry&&(
+                                    <div style={{ display:"flex",gap:6,marginTop:6 }}>
+                                      <button className="btn btn-ghost" onClick={()=>openEdit(r.entry!)} style={{ flex:1,fontSize:11,padding:"4px 6px" }}>✏️ แก้</button>
+                                      <button className="btn btn-red" onClick={()=>setDeleteId(r.entry!.id)} style={{ flex:1,fontSize:11,padding:"4px 6px" }}>🗑️ ลบ</button>
+                                    </div>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -1410,8 +1344,8 @@ export default function App() {
                       return (
                         <div style={{ padding:"10px 12px 14px" }}>
                           <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8 }}>
-                            {column(incList, pIncome, "inc")}
-                            {column(expList, pExpense, "exp")}
+                            {column(incRows, pIncome, "inc")}
+                            {column(expRows, pExpense, "exp")}
                           </div>
                           <div style={{ marginTop:12,padding:"12px 14px",borderRadius:10,background:pNet>=0?"linear-gradient(135deg,#e8eaf6,#f3f4ff)":"linear-gradient(135deg,#ffebee,#fce4ec)",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
                             <span style={{ fontSize:13,fontWeight:700 }}>{pNet>=0?"📈 กำไรสุทธิ":"📉 ขาดทุนสุทธิ"}</span>
@@ -1592,7 +1526,7 @@ export default function App() {
 
       {/* BOTTOM NAV */}
       <div className="bottom-nav">
-        {[{k:"dashboard",icon:"📊",l:"ภาพรวม"},{k:"list",icon:"📋",l:"รายการ"},{k:"installments",icon:"📁",l:"โครงการ"}].map(n=>(
+        {[{k:"dashboard",icon:"📊",l:"ภาพรวม"},{k:"installments",icon:"📁",l:"โครงการ"}].map(n=>(
           <button key={n.k} className={`bnav-btn${view===n.k?" active":""}`} onClick={()=>setView(n.k)}>
             <span>{n.icon}</span>{n.l}
             {n.k==="installments"&&urgentInst.length>0&&<div style={{ position:"absolute",top:6,background:"#c62828",color:"#fff",borderRadius:50,width:16,height:16,fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700 }}>{urgentInst.length}</div>}
@@ -1601,20 +1535,14 @@ export default function App() {
         <button className={`bnav-btn${(view==="settings"||view==="project-manage")?" active":""}`} onClick={()=>setView("settings")}><span>⚙️</span>ตั้งค่า</button>
       </div>
 
-      <button className="fab" onClick={()=>openAdd()}>+</button>
 
       {/* ENTRY FORM */}
       {showForm&&(
         <div className="modal-bg" onClick={()=>setShowForm(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
-            <div style={{ fontWeight:800,fontSize:18,marginBottom:20 }}>{editId?"✏️ แก้ไขรายการ":"➕ เพิ่มรายการใหม่"}</div>
+            <div style={{ fontWeight:800,fontSize:18,marginBottom:20 }}>{editId?"✏️ แก้ไขรายการ":"💸 บันทึกรายจ่าย"}</div>
             <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
-              <div style={{ display:"flex",borderRadius:12,overflow:"hidden",border:"1.5px solid #e0e4f0" }}>
-                {[{v:"income",l:"💰 รายรับ",c:"#2e7d32"},{v:"expense",l:"💸 รายจ่าย",c:"#c62828"}].map(t=>(
-                  <button key={t.v} onClick={()=>handleTypeChange(t.v)} style={{ flex:1,padding:13,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:15,fontWeight:700,background:form.type===t.v?t.c:"transparent",color:form.type===t.v?"#fff":"#bbb" }}>{t.l}</button>
-                ))}
-              </div>
               {[
                 {label:"วันที่",el:<input type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/>},
                 {label:"หมวดหมู่",el:<select value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>{cats.map(c=><option key={c}>{c}</option>)}</select>},
