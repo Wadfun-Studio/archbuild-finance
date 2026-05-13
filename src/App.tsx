@@ -365,6 +365,22 @@ export default function App() {
   function dismissSheetSetup() { localStorage.setItem("wf_sheet_setup_dismissed","1"); setSheetSetupDismissed(true); }
   const [projectTax, setProjectTax] = useState<Record<string, ProjectTaxSettings>>({});
   const [pendingTaxPropagate, setPendingTaxPropagate] = useState<{ name: string; next: ProjectTaxSettings }|null>(null);
+  const [notifEnabled, setNotifEnabled] = useState<boolean>(()=>localStorage.getItem("wf_notif_enabled")!=="0");
+  const [alertDaysAhead, setAlertDaysAhead] = useState<number>(()=>{
+    const v = parseInt(localStorage.getItem("wf_alert_days_ahead")||"7",10);
+    return Number.isFinite(v)&&v>0 ? v : 7;
+  });
+  const [dateFormat, setDateFormat] = useState<"be"|"ce">(()=>(localStorage.getItem("wf_date_format") as "be"|"ce")||"be");
+  const [deleteProj, setDeleteProj] = useState<string|null>(null);
+  const [deleteProjConfirm, setDeleteProjConfirm] = useState("");
+
+  const fmtDate = useCallback((d: string|Date) => {
+    if (!d) return "";
+    const date = d instanceof Date ? d : new Date(d);
+    const opts: Intl.DateTimeFormatOptions = { day: "2-digit", month: "short", year: "numeric" };
+    if (dateFormat === "ce") return date.toLocaleDateString("th-TH-u-ca-gregory", opts);
+    return date.toLocaleDateString("th-TH", opts);
+  }, [dateFormat]);
 
   function toggleGroup(key: string) {
     setCollapsedGroups(s => ({ ...s, [key]: !s[key] }));
@@ -430,21 +446,19 @@ export default function App() {
     }
   }, []);
 
-  // Check installments and notify (payables: 3-day window, receivables: 7-day window)
+  // Check installments and notify, honoring user-configured window
   useEffect(() => {
-    if (!notifGranted || installments.length === 0) return;
+    if (!notifGranted || !notifEnabled || installments.length === 0) return;
     installments.filter(i => i.status === "pending").forEach(inst => {
       const days = daysUntil(inst.dueDate);
-      if (days < 0) return;
-      const window = inst.kind === "payable" ? 3 : 7;
-      if (days > window) return;
+      if (days < 0 || days > alertDaysAhead) return;
       const icon = inst.kind === "payable" ? "💸" : "💰";
       new Notification(`${icon} ครบกำหนด${instLabel(inst.kind)}: ${inst.name}`, {
         body: `โครงการ ${inst.project} — ฿${fmt(inst.amount)} — อีก ${days} วัน (${fmtDate(inst.dueDate)})`,
         icon: "/favicon.ico"
       });
     });
-  }, [notifGranted, installments]);
+  }, [notifGranted, notifEnabled, alertDaysAhead, installments, fmtDate]);
 
   async function requestNotifPermission() {
     if (!("Notification" in window)) { showToast("เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน", "err"); return; }
@@ -565,11 +579,18 @@ export default function App() {
     setSaving(false);
   }
 
-  async function removeProject(p: string) {
-    if (entries.some(e=>e.project===p)) { showToast("ไม่สามารถลบโครงการที่มีรายการอยู่","err"); return; }
+  async function doDeleteProject(p: string) {
     setSaving(true);
-    try { await apiGet("deleteProject",{name:p}); setProjects(ps=>ps.filter(x=>x!==p)); }
-    catch { showToast("ลบโครงการไม่สำเร็จ","err"); }
+    try {
+      const projEntries = entries.filter(e=>e.project===p);
+      await Promise.all(projEntries.map(e=>apiGet("deleteEntry", { id: String(e.id) })));
+      setEntries(es=>es.filter(e=>e.project!==p));
+      saveInstallments(installments.filter(i=>i.project!==p));
+      await apiGet("deleteProject", { name: p });
+      setProjects(ps=>ps.filter(x=>x!==p));
+      if (selectedProject===p) setSelectedProject(null);
+      showToast(`ลบโครงการ "${p}" แล้ว`, "err");
+    } catch { showToast("ลบโครงการไม่สำเร็จ", "err"); }
     setSaving(false);
   }
 
@@ -670,13 +691,13 @@ export default function App() {
 
   // VAT due notification on the 15th
   useEffect(() => {
-    if (!notifGranted) return;
+    if (!notifGranted || !notifEnabled) return;
     if (!vatDueInfo.isDueToday || vatDueInfo.totalRemit <= 0) return;
     new Notification("🧾 วันนี้ครบกำหนดยื่นภาษี", {
       body: `เดือน ${vatDueInfo.monthStr} — นำส่ง VAT ฿${fmt(vatDueInfo.vatRemit)} + WHT ฿${fmt(vatDueInfo.whtRemit)} = ฿${fmt(vatDueInfo.totalRemit)}`,
       icon: "/favicon.ico"
     });
-  }, [notifGranted, vatDueInfo]);
+  }, [notifGranted, notifEnabled, vatDueInfo]);
 
   const hasUserFilter = filterType!=="all"||filterProject!=="all"||!!dateFrom||!!dateTo;
   const filtered = useMemo(()=>{
@@ -698,7 +719,7 @@ export default function App() {
   const cats = form.type==="income"?CATS_IN:CATS_EX;
 
   const pendingInst = installments.filter(i=>i.status==="pending");
-  const urgentInst = pendingInst.filter(i=>daysUntil(i.dueDate)<=7&&daysUntil(i.dueDate)>=0);
+  const urgentInst = pendingInst.filter(i=>daysUntil(i.dueDate)<=alertDaysAhead&&daysUntil(i.dueDate)>=0);
 
   if (loading) return (
     <div style={{ display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100vh",fontFamily:"'Sarabun',sans-serif",color:"#aaa",gap:14 }}>
@@ -1406,6 +1427,167 @@ export default function App() {
           );
         })()}
 
+        {/* SETTINGS */}
+        {view==="settings"&&(
+          <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
+            <div className="card" style={{ padding:18 }}>
+              <div className="stitle" style={{ marginBottom:14 }}>การแสดงผล</div>
+
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:14,fontWeight:600 }}>🔔 การแจ้งเตือน</div>
+                  <div style={{ fontSize:11,color:"#888",marginTop:2 }}>แจ้งเตือนงวดที่ใกล้ครบกำหนดและภาษีถึงกำหนดยื่น</div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={notifEnabled}
+                  onClick={()=>{
+                    const next = !notifEnabled;
+                    setNotifEnabled(next);
+                    localStorage.setItem("wf_notif_enabled", next?"1":"0");
+                    if (next && !notifGranted) requestNotifPermission();
+                  }}
+                  style={{ width:50,height:28,borderRadius:14,border:"none",background:notifEnabled?"#2e7d32":"#ccc",cursor:"pointer",position:"relative",transition:"background .2s",flexShrink:0 }}
+                >
+                  <span style={{ position:"absolute",top:3,left:notifEnabled?25:3,width:22,height:22,borderRadius:"50%",background:"#fff",transition:"left .2s",boxShadow:"0 1px 3px rgba(0,0,0,.2)" }}/>
+                </button>
+              </div>
+
+              <div style={{ padding:"14px 0",borderBottom:"1px solid #f0f0f0" }}>
+                <label style={{ fontSize:14,fontWeight:600,display:"block",marginBottom:4 }}>📅 แจ้งเตือนล่วงหน้า</label>
+                <div style={{ fontSize:11,color:"#888",marginBottom:8 }}>กี่วันก่อนครบกำหนดงวด</div>
+                <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+                  <input
+                    type="number"
+                    min="1"
+                    max="60"
+                    value={alertDaysAhead}
+                    onChange={e=>{
+                      const v = parseInt(e.target.value,10);
+                      const next = Number.isFinite(v)&&v>0 ? v : 1;
+                      setAlertDaysAhead(next);
+                      localStorage.setItem("wf_alert_days_ahead", String(next));
+                    }}
+                    style={{ width:90,textAlign:"center",fontSize:15,fontWeight:700 }}
+                  />
+                  <span style={{ fontSize:14,color:"#666" }}>วัน</span>
+                </div>
+              </div>
+
+              <div style={{ padding:"14px 0" }}>
+                <label style={{ fontSize:14,fontWeight:600,display:"block",marginBottom:4 }}>🗓️ รูปแบบวันที่</label>
+                <div style={{ fontSize:11,color:"#888",marginBottom:8 }}>ตัวอย่าง: {fmtDate(new Date())}</div>
+                <div style={{ display:"flex",gap:8 }}>
+                  {([
+                    {v:"be" as const, l:"พ.ศ.", sub:"พุทธศักราช"},
+                    {v:"ce" as const, l:"ค.ศ.", sub:"คริสต์ศักราช"},
+                  ]).map(opt=>{
+                    const active = dateFormat===opt.v;
+                    return (
+                      <button
+                        key={opt.v}
+                        type="button"
+                        onClick={()=>{ setDateFormat(opt.v); localStorage.setItem("wf_date_format", opt.v); }}
+                        style={{ flex:1,padding:"12px 8px",borderRadius:10,border:`2px solid ${active?"#1565c0":"#e0e4f0"}`,background:active?"#e3f2fd":"#fff",cursor:"pointer",fontFamily:"inherit",textAlign:"center" }}
+                      >
+                        <div style={{ fontSize:15,fontWeight:800,color:active?"#0d47a1":"#666" }}>{opt.l}</div>
+                        <div style={{ fontSize:11,color:active?"#1565c0":"#aaa",marginTop:2 }}>{opt.sub}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ background:"#fff5f5",border:"2px solid #ef9a9a",borderRadius:14,padding:18 }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:6 }}>
+                <span style={{ fontSize:20 }}>⚠️</span>
+                <div style={{ fontWeight:800,fontSize:15,color:"#b71c1c",letterSpacing:".04em" }}>DANGER ZONE</div>
+              </div>
+              <div style={{ fontSize:12,color:"#c62828",marginBottom:14,lineHeight:1.5 }}>
+                การกระทำในส่วนนี้ไม่สามารถย้อนกลับได้ กรุณาพิจารณาก่อนดำเนินการ
+              </div>
+              <button
+                className="btn btn-red"
+                onClick={()=>setView("project-manage")}
+                style={{ width:"100%",padding:13,fontSize:14 }}
+              >
+                🗂️ จัดการโครงการ
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* PROJECT MANAGE (DANGER ZONE) */}
+        {view==="project-manage"&&(
+          <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+            <button
+              className="btn btn-ghost"
+              onClick={()=>setView("settings")}
+              style={{ alignSelf:"flex-start",padding:"8px 14px",fontSize:13 }}
+            >
+              ← กลับไปตั้งค่า
+            </button>
+
+            <div style={{ background:"#fff5f5",border:"2px solid #ef9a9a",borderRadius:14,padding:"14px 16px" }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:4 }}>
+                <span style={{ fontSize:18 }}>⚠️</span>
+                <div style={{ fontWeight:800,fontSize:14,color:"#b71c1c" }}>จัดการโครงการ — Danger Zone</div>
+              </div>
+              <div style={{ fontSize:12,color:"#c62828",lineHeight:1.5 }}>
+                การลบโครงการจะลบรายการบัญชีและงวดงานทั้งหมดของโครงการนั้นถาวร — ไม่สามารถย้อนกลับได้
+              </div>
+            </div>
+
+            <div className="card" style={{ padding:14 }}>
+              <div style={{ display:"flex",gap:8 }}>
+                <input
+                  placeholder="ชื่อโครงการใหม่..."
+                  value={newProj}
+                  onChange={e=>setNewProj(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&addProject()}
+                  style={{ flex:1 }}
+                />
+                <button className="btn btn-green" onClick={addProject} disabled={saving} style={{ whiteSpace:"nowrap" }}>+ เพิ่ม</button>
+              </div>
+            </div>
+
+            <div className="card" style={{ padding:14 }}>
+              <div className="stitle" style={{ marginBottom:10 }}>โครงการทั้งหมด ({projects.length})</div>
+              {projects.length===0?(
+                <div style={{ textAlign:"center",color:"#bbb",padding:"28px 0",fontSize:14 }}>ยังไม่มีโครงการ</div>
+              ):(
+                <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+                  {projects.map(p=>{
+                    const entriesCount = entries.filter(e=>e.project===p).length;
+                    const instCount = installments.filter(i=>i.project===p).length;
+                    return (
+                      <div key={p} style={{ padding:"12px 14px",background:"#f8f9ff",borderRadius:10,border:"1px solid #eef0f8" }}>
+                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,marginBottom:8 }}>
+                          <div style={{ flex:1,minWidth:0 }}>
+                            <div style={{ fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis" }}>📁 {p}</div>
+                            <div style={{ fontSize:12,color:"#888",marginTop:4 }}>
+                              {entriesCount} รายการบัญชี · {instCount} งวดงาน
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          className="btn btn-red"
+                          onClick={()=>{ setDeleteProj(p); setDeleteProjConfirm(""); }}
+                          style={{ width:"100%",padding:9,fontSize:13 }}
+                        >
+                          🗑️ ลบโครงการ
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* BOTTOM NAV */}
@@ -1416,7 +1598,7 @@ export default function App() {
             {n.k==="installments"&&urgentInst.length>0&&<div style={{ position:"absolute",top:6,background:"#c62828",color:"#fff",borderRadius:50,width:16,height:16,fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700 }}>{urgentInst.length}</div>}
           </button>
         ))}
-        <button className="bnav-btn" onClick={()=>setShowProjMgr(true)}><span>⚙️</span>ตั้งค่า</button>
+        <button className={`bnav-btn${(view==="settings"||view==="project-manage")?" active":""}`} onClick={()=>setView("settings")}><span>⚙️</span>ตั้งค่า</button>
       </div>
 
       <button className="fab" onClick={()=>openAdd()}>+</button>
@@ -1687,30 +1869,27 @@ export default function App() {
         </div>
       )}
 
-      {/* PROJECT MANAGER */}
+      {/* ADD PROJECT MODAL */}
       {showProjMgr&&(
         <div className="modal-bg" onClick={()=>setShowProjMgr(false)}>
           <div className="modal" onClick={e=>e.stopPropagation()}>
             <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
-            <div style={{ fontWeight:800,fontSize:18,marginBottom:18 }}>⚙️ จัดการโครงการ</div>
+            <div style={{ fontWeight:800,fontSize:18,marginBottom:6 }}>📁 เพิ่มโครงการใหม่</div>
+            <div style={{ fontSize:12,color:"#888",marginBottom:16 }}>
+              สำหรับการลบ ให้ไปที่ <b>ตั้งค่า → Danger Zone → จัดการโครงการ</b>
+            </div>
             <div style={{ display:"flex",gap:8,marginBottom:16 }}>
               <input placeholder="ชื่อโครงการใหม่..." value={newProj} onChange={e=>setNewProj(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addProject()} style={{ flex:1 }}/>
               <button className="btn btn-green" onClick={addProject} disabled={saving} style={{ whiteSpace:"nowrap" }}>+ เพิ่ม</button>
             </div>
-            <div style={{ display:"flex",flexDirection:"column",gap:8,maxHeight:300,overflowY:"auto" }}>
-              {projects.map(p=>(
-                <div key={p} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 14px",background:"#f8f9ff",borderRadius:10 }}>
-                  <span style={{ fontSize:14 }}>{p}</span>
-                  <button className="btn btn-red" onClick={()=>removeProject(p)} style={{ padding:"5px 12px",fontSize:12 }}>ลบ</button>
-                </div>
-              ))}
-            </div>
-            {!notifGranted&&(
-              <button className="btn btn-orange" style={{ marginTop:16,width:"100%",padding:13 }} onClick={()=>{setShowProjMgr(false);requestNotifPermission();}}>
-                🔔 เปิดการแจ้งเตือน Push Notification
-              </button>
+            {projects.length>0&&(
+              <div style={{ display:"flex",flexDirection:"column",gap:6,maxHeight:240,overflowY:"auto",marginBottom:8 }}>
+                {projects.map(p=>(
+                  <div key={p} style={{ padding:"10px 14px",background:"#f8f9ff",borderRadius:10,fontSize:13 }}>{p}</div>
+                ))}
+              </div>
             )}
-            <button className="btn btn-ghost" style={{ marginTop:12,width:"100%",padding:13 }} onClick={()=>setShowProjMgr(false)}>ปิด</button>
+            <button className="btn btn-ghost" style={{ marginTop:8,width:"100%",padding:13 }} onClick={()=>setShowProjMgr(false)}>ปิด</button>
           </div>
         </div>
       )}
@@ -1758,6 +1937,72 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* DELETE PROJECT CONFIRM (two-step) */}
+      {deleteProj&&(()=>{
+        const entriesCount = entries.filter(e=>e.project===deleteProj).length;
+        const instCount = installments.filter(i=>i.project===deleteProj).length;
+        const totalItems = entriesCount + instCount;
+        const canConfirm = deleteProjConfirm.trim() === deleteProj && !saving;
+        return (
+          <div className="modal-bg" onClick={()=>{ if(!saving){ setDeleteProj(null); setDeleteProjConfirm(""); } }}>
+            <div className="modal" onClick={e=>e.stopPropagation()} style={{ borderTop:"4px solid #c62828" }}>
+              <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+              <div style={{ fontSize:38,textAlign:"center",marginBottom:8 }}>⚠️</div>
+              <div style={{ fontWeight:800,fontSize:18,textAlign:"center",marginBottom:14,color:"#c62828" }}>ยืนยันการลบโครงการ</div>
+              <div style={{ background:"#ffebee",border:"1.5px solid #ef9a9a",borderRadius:10,padding:"12px 14px",marginBottom:16 }}>
+                <div style={{ fontSize:13,color:"#b71c1c",marginBottom:8,fontWeight:600 }}>การลบจะทำให้ข้อมูลต่อไปนี้หายไปถาวร:</div>
+                <div style={{ fontSize:14,color:"#b71c1c",marginBottom:3 }}>• โครงการ <b>"{deleteProj}"</b></div>
+                <div style={{ fontSize:14,color:"#b71c1c",marginBottom:3 }}>• <b>{entriesCount}</b> รายการบัญชี</div>
+                <div style={{ fontSize:14,color:"#b71c1c" }}>• <b>{instCount}</b> งวดงาน</div>
+                <div style={{ fontSize:13,color:"#c62828",marginTop:10,paddingTop:10,borderTop:"1px solid #ffcdd2",fontWeight:700 }}>
+                  รวม {totalItems} รายการที่จะหายไป
+                </div>
+              </div>
+              <div style={{ marginBottom:16 }}>
+                <label style={{ fontSize:12,color:"#666",fontWeight:600,display:"block",marginBottom:8 }}>
+                  พิมพ์ชื่อโครงการ <b style={{ color:"#c62828" }}>"{deleteProj}"</b> เพื่อยืนยัน:
+                </label>
+                <input
+                  type="text"
+                  value={deleteProjConfirm}
+                  onChange={e=>setDeleteProjConfirm(e.target.value)}
+                  placeholder={deleteProj}
+                  autoFocus
+                  style={{ borderColor: canConfirm ? "#c62828" : "#e0e4f0" }}
+                />
+              </div>
+              <div style={{ display:"flex",gap:10 }}>
+                <button
+                  className="btn btn-ghost"
+                  onClick={()=>{ setDeleteProj(null); setDeleteProjConfirm(""); }}
+                  disabled={saving}
+                  style={{ flex:1,padding:13 }}
+                >ยกเลิก</button>
+                <button
+                  className="btn"
+                  disabled={!canConfirm}
+                  onClick={async()=>{
+                    if (!canConfirm) return;
+                    const name = deleteProj;
+                    await doDeleteProject(name);
+                    setDeleteProj(null);
+                    setDeleteProjConfirm("");
+                  }}
+                  style={{
+                    flex:1,padding:13,fontSize:14,
+                    background: canConfirm ? "#c62828" : "#bbb",
+                    color:"#fff",
+                    cursor: canConfirm ? "pointer" : "not-allowed",
+                  }}
+                >
+                  {saving?"กำลังลบ...":"ยืนยันลบ"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* TOAST */}
       {toast&&(
