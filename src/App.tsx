@@ -33,6 +33,96 @@ function formatThousand(s: string): string {
 }
 function parseThousand(s: string): string { return s.replace(/,/g, ""); }
 
+// =========================
+// Passkey (WebAuthn) helpers — gate dashboard with Windows Hello / Touch ID / fingerprint
+// =========================
+const PASSKEY_ID_KEY = "wf_passkey_credential_id";
+const PASSKEY_USER_KEY = "wf_passkey_user_id";
+
+function bufToB64Url(buf: ArrayBufferLike): string {
+  const bytes = new Uint8Array(buf as ArrayBuffer);
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function b64UrlToBuf(b64url: string): ArrayBuffer {
+  const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+  const bin = atob(b64 + pad);
+  const out = new ArrayBuffer(bin.length);
+  const view = new Uint8Array(out);
+  for (let i = 0; i < bin.length; i++) view[i] = bin.charCodeAt(i);
+  return out;
+}
+function randomBytes(n: number): ArrayBuffer {
+  const out = new ArrayBuffer(n);
+  crypto.getRandomValues(new Uint8Array(out));
+  return out;
+}
+
+function isPasskeySupported(): boolean {
+  return typeof window !== "undefined"
+    && !!window.PublicKeyCredential
+    && typeof navigator.credentials?.create === "function";
+}
+
+function hasPasskeyRegistered(): boolean {
+  return !!localStorage.getItem(PASSKEY_ID_KEY);
+}
+
+async function registerPasskey(): Promise<void> {
+  if (!isPasskeySupported()) throw new Error("เบราว์เซอร์นี้ไม่รองรับ Passkey");
+  // Use an existing user handle if present (allows re-registering to same identity), else create new
+  let userId: ArrayBuffer;
+  const existing = localStorage.getItem(PASSKEY_USER_KEY);
+  if (existing) userId = b64UrlToBuf(existing);
+  else {
+    userId = randomBytes(16);
+    localStorage.setItem(PASSKEY_USER_KEY, bufToB64Url(userId));
+  }
+  const cred = await navigator.credentials.create({
+    publicKey: {
+      challenge: randomBytes(32),
+      rp: { name: "Wadfun Finance", id: window.location.hostname },
+      user: { id: userId, name: "wadfun-ceo", displayName: "Wadfun CEO" },
+      pubKeyCredParams: [
+        { type: "public-key", alg: -7 },   // ES256
+        { type: "public-key", alg: -257 }, // RS256
+      ],
+      authenticatorSelection: {
+        authenticatorAttachment: "platform", // Use built-in (Windows Hello / Touch ID / fingerprint)
+        userVerification: "required",
+        residentKey: "preferred",
+      },
+      timeout: 60000,
+      attestation: "none",
+    },
+  }) as PublicKeyCredential | null;
+  if (!cred) throw new Error("ลงทะเบียน Passkey ไม่สำเร็จ");
+  localStorage.setItem(PASSKEY_ID_KEY, bufToB64Url(cred.rawId));
+}
+
+async function authenticateWithPasskey(): Promise<boolean> {
+  if (!isPasskeySupported()) throw new Error("เบราว์เซอร์นี้ไม่รองรับ Passkey");
+  const credId = localStorage.getItem(PASSKEY_ID_KEY);
+  if (!credId) throw new Error("ยังไม่ได้ลงทะเบียน Passkey");
+  const assertion = await navigator.credentials.get({
+    publicKey: {
+      challenge: randomBytes(32),
+      rpId: window.location.hostname,
+      allowCredentials: [{ type: "public-key", id: b64UrlToBuf(credId) }],
+      userVerification: "required",
+      timeout: 60000,
+    },
+  }) as PublicKeyCredential | null;
+  return !!assertion;
+}
+
+function clearPasskey(): void {
+  localStorage.removeItem(PASSKEY_ID_KEY);
+  localStorage.removeItem(PASSKEY_USER_KEY);
+}
+
 // Thai number-to-words (baht)
 function bahtText(num: number): string {
   const digits = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
@@ -425,6 +515,11 @@ export default function App() {
   const [activeScope, setActiveScope] = useState<InstScope>("design");
   const [deleteInstId, setDeleteInstId] = useState<number|null>(null);
   const [apiUrlInput, setApiUrlInput] = useState<string>(()=>getApiUrl());
+  // Passkey state — only for the dashboard view (auto-clears on tab change)
+  const [authenticated, setAuthenticated] = useState<boolean>(false);
+  const [passkeyRegistered, setPasskeyRegistered] = useState<boolean>(()=>hasPasskeyRegistered());
+  const [passkeyBusy, setPasskeyBusy] = useState<boolean>(false);
+  const [passkeyError, setPasskeyError] = useState<string|null>(null);
   const [showTaxSummary, setShowTaxSummary] = useState(false);
   const [notifGranted, setNotifGranted] = useState(false);
   const [selectedProject, setSelectedProject] = useState<string|null>(null);
@@ -544,6 +639,14 @@ export default function App() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // Auto-logout passkey session when leaving dashboard tab — must re-auth on every entry
+  useEffect(() => {
+    if (view !== "dashboard" && authenticated) {
+      setAuthenticated(false);
+      setPasskeyError(null);
+    }
+  }, [view, authenticated]);
 
 
   // Push notification setup
@@ -1004,8 +1107,64 @@ export default function App() {
 
       <div style={{ maxWidth:900,margin:"0 auto",padding:"20px 16px 140px" }}>
 
+        {/* DASHBOARD — Passkey gate (Windows Hello / Touch ID / fingerprint) */}
+        {view==="dashboard"&&!authenticated&&(
+          <div className="card" style={{ padding:"36px 24px",maxWidth:420,margin:"40px auto",textAlign:"center" }}>
+            <img src="/logo-cropped.jpg" alt="Wadfun" style={{ height:40,width:"auto",display:"block",margin:"0 auto 14px" }}/>
+            <div style={{ fontSize:34,marginBottom:8 }}>👆</div>
+            <div style={{ fontWeight:800,fontSize:17,marginBottom:6 }}>หน้าภาพรวม — เฉพาะ CEO</div>
+            <div style={{ fontSize:12,color:"#888",marginBottom:22 }}>
+              {!isPasskeySupported()
+                ? "เบราว์เซอร์นี้ไม่รองรับ Passkey — โปรดใช้ Edge / Chrome / Safari ที่ทันสมัย"
+                : passkeyRegistered
+                  ? "ปลดล็อกด้วย Windows Hello / Touch ID / นิ้วมือ"
+                  : "ตั้งค่า Passkey ครั้งแรก — ใช้ Windows Hello / Touch ID / นิ้วมือ"}
+            </div>
+            {passkeyError&&(
+              <div style={{ color:"#c62828",fontSize:13,marginBottom:14,fontWeight:600,background:"#ffebee",padding:"8px 12px",borderRadius:8,border:"1px solid #ef9a9a" }}>
+                ⚠️ {passkeyError}
+              </div>
+            )}
+            {isPasskeySupported()&&passkeyRegistered&&(
+              <button
+                onClick={async()=>{
+                  setPasskeyBusy(true); setPasskeyError(null);
+                  try {
+                    const ok = await authenticateWithPasskey();
+                    if (ok) setAuthenticated(true);
+                    else setPasskeyError("ปลดล็อกไม่สำเร็จ — ลองอีกครั้ง");
+                  } catch (e) { setPasskeyError((e as Error).message || "ปลดล็อกไม่สำเร็จ"); }
+                  setPasskeyBusy(false);
+                }}
+                disabled={passkeyBusy}
+                style={{ width:"100%",padding:16,fontSize:15,fontWeight:700,fontFamily:"inherit",background:"#1565c0",color:"#fff",border:"none",borderRadius:12,cursor:passkeyBusy?"wait":"pointer" }}
+              >{passkeyBusy?"กำลังตรวจสอบ...":"👆 ปลดล็อกด้วย Passkey"}</button>
+            )}
+            {isPasskeySupported()&&!passkeyRegistered&&(
+              <button
+                onClick={async()=>{
+                  setPasskeyBusy(true); setPasskeyError(null);
+                  try {
+                    await registerPasskey();
+                    setPasskeyRegistered(true);
+                    setAuthenticated(true);
+                    showToast("ลงทะเบียน Passkey สำเร็จ ✅");
+                  } catch (e) { setPasskeyError((e as Error).message || "ลงทะเบียน Passkey ไม่สำเร็จ"); }
+                  setPasskeyBusy(false);
+                }}
+                disabled={passkeyBusy}
+                style={{ width:"100%",padding:16,fontSize:15,fontWeight:700,fontFamily:"inherit",background:"#2e7d32",color:"#fff",border:"none",borderRadius:12,cursor:passkeyBusy?"wait":"pointer" }}
+              >{passkeyBusy?"กำลังตั้งค่า...":"✨ ตั้งค่า Passkey ตอนนี้"}</button>
+            )}
+            <div style={{ marginTop:16,fontSize:11,color:"#aaa",lineHeight:1.5 }}>
+              คุณสามารถดูแท็บอื่นได้โดยไม่ต้องปลดล็อก<br/>
+              ออกจากแท็บภาพรวม → ปลดล็อกใหม่ทุกครั้ง
+            </div>
+          </div>
+        )}
+
         {/* DASHBOARD */}
-        {view==="dashboard"&&(
+        {view==="dashboard"&&authenticated&&(
           <div style={{ display:"flex",flexDirection:"column",gap:16 }}>
             {/* Google Sheet setup notice */}
             {!sheetSetupDismissed&&(
@@ -1740,9 +1899,74 @@ export default function App() {
             </div>
 
             <div className="card" style={{ padding:18 }}>
-              <div className="stitle" style={{ marginBottom:14 }}>🔗 การเชื่อมต่อ</div>
+              <div className="stitle" style={{ marginBottom:14 }}>🔒 ความปลอดภัย</div>
+              <div style={{ padding:"12px 0",borderBottom:"1px solid #f0f0f0" }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:10 }}>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <div style={{ fontSize:14,fontWeight:600 }}>👆 Passkey (Windows Hello / Touch ID)</div>
+                    <div style={{ fontSize:11,color:"#888",marginTop:2 }}>
+                      {!isPasskeySupported()
+                        ? "เบราว์เซอร์นี้ไม่รองรับ"
+                        : passkeyRegistered
+                          ? "✅ ลงทะเบียนแล้ว — ใช้ปลดล็อกหน้าภาพรวม"
+                          : "ยังไม่ได้ตั้งค่า"}
+                    </div>
+                  </div>
+                </div>
+                {isPasskeySupported()&&(
+                  <div style={{ display:"flex",gap:8,marginTop:10 }}>
+                    {!passkeyRegistered&&(
+                      <button
+                        className="btn btn-green"
+                        disabled={passkeyBusy}
+                        onClick={async()=>{
+                          setPasskeyBusy(true);
+                          try {
+                            await registerPasskey();
+                            setPasskeyRegistered(true);
+                            showToast("ลงทะเบียน Passkey สำเร็จ ✅");
+                          } catch (e) { showToast("ล้มเหลว: "+((e as Error).message||"unknown"),"err"); }
+                          setPasskeyBusy(false);
+                        }}
+                        style={{ flex:1,fontSize:13,padding:10 }}
+                      >✨ ตั้งค่า Passkey</button>
+                    )}
+                    {passkeyRegistered&&(
+                      <>
+                        <button
+                          className="btn btn-outline"
+                          disabled={passkeyBusy}
+                          onClick={async()=>{
+                            setPasskeyBusy(true);
+                            try {
+                              await registerPasskey();
+                              showToast("ลงทะเบียน Passkey ใหม่ทับของเดิมแล้ว ✅");
+                            } catch (e) { showToast("ล้มเหลว: "+((e as Error).message||"unknown"),"err"); }
+                            setPasskeyBusy(false);
+                          }}
+                          style={{ flex:1,fontSize:13,padding:10 }}
+                        >🔄 ลงทะเบียนใหม่</button>
+                        <button
+                          className="btn btn-red"
+                          onClick={()=>{
+                            if (!confirm("ล้าง Passkey? — ครั้งถัดไปต้องตั้งค่าใหม่")) return;
+                            clearPasskey();
+                            setPasskeyRegistered(false);
+                            setAuthenticated(false);
+                            showToast("ล้าง Passkey แล้ว","err");
+                          }}
+                          style={{ flex:1,fontSize:13,padding:10 }}
+                        >🗑️ ล้าง</button>
+                      </>
+                    )}
+                  </div>
+                )}
+                <div style={{ marginTop:10,fontSize:11,color:"#888",lineHeight:1.5 }}>
+                  🔒 ออกจากแท็บภาพรวม → ปลดล็อกใหม่ทุกครั้ง
+                </div>
+              </div>
               <div style={{ padding:"12px 0" }}>
-                <div style={{ fontSize:14,fontWeight:600 }}>Apps Script URL</div>
+                <div style={{ fontSize:14,fontWeight:600 }}>🔗 Apps Script URL</div>
                 <div style={{ fontSize:11,color:"#888",marginTop:2,marginBottom:8 }}>
                   ถ้าสร้าง deployment ใหม่และได้ URL ใหม่ ให้วาง URL ใหม่ที่นี่ (ปล่อยว่างเพื่อใช้ค่าเริ่มต้น)
                 </div>
