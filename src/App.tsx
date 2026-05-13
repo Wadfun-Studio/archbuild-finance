@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, type ReactNode } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from "react";
 
 // Use same-origin Vercel proxy to avoid Google Apps Script CORS/CORB issues.
 // The proxy at /api/proxy forwards requests to Apps Script server-side and
@@ -546,6 +546,22 @@ export default function App() {
   const [ohForm, setOhForm] = useState<{ kind:OverheadKind; date:string; category:string; description:string; amount:string; project:string; employeeId:string; hasVat:boolean; hasWht:boolean; whtRate:number }>({
     kind:"project", date:today(), category:PROJECT_OH_CATS[0], description:"", amount:"", project:"", employeeId:"", hasVat:false, hasWht:false, whtRate:3
   });
+  // Employee master state
+  const [showEmpMgr, setShowEmpMgr] = useState(false);
+  const [showEmpForm, setShowEmpForm] = useState(false);
+  const [editEmpId, setEditEmpId] = useState<number|null>(null);
+  const [deleteEmpId, setDeleteEmpId] = useState<number|null>(null);
+  const [empForm, setEmpForm] = useState<{ name:string; position:string; baseSalary:string; startDate:string; active:boolean; hasSSO:boolean; whtRate:string }>(
+    { name:"", position:"", baseSalary:"", startDate:today(), active:true, hasSSO:true, whtRate:"0" }
+  );
+  // Recurring templates state
+  const [showRecMgr, setShowRecMgr] = useState(false);
+  const [showRecForm, setShowRecForm] = useState(false);
+  const [editRecId, setEditRecId] = useState<number|null>(null);
+  const [deleteRecId, setDeleteRecId] = useState<number|null>(null);
+  const [recForm, setRecForm] = useState<{ kind:OverheadKind; category:string; description:string; amount:string; project:string; employeeId:string; dayOfMonth:string; hasVat:boolean; hasWht:boolean; whtRate:number; active:boolean }>(
+    { kind:"staff", category:STAFF_OH_CATS[4], description:"", amount:"", project:"", employeeId:"", dayOfMonth:"1", hasVat:false, hasWht:false, whtRate:3, active:true }
+  );
   const [activeScope, setActiveScope] = useState<InstScope>("design");
   const [deleteInstId, setDeleteInstId] = useState<number|null>(null);
   // PIN state — only for the dashboard view (auto-clears on tab change)
@@ -798,6 +814,184 @@ export default function App() {
     saveOverheads(overheads.filter(o=>o.id!==id));
     showToast("ลบรายการ overhead แล้ว","err");
   }
+
+  // ===== Employee CRUD =====
+  function openAddEmployee() {
+    setEditEmpId(null);
+    setEmpForm({ name:"", position:"", baseSalary:"", startDate:today(), active:true, hasSSO:true, whtRate:"0" });
+    setShowEmpForm(true);
+  }
+  function openEditEmployee(e: Employee) {
+    setEditEmpId(e.id);
+    setEmpForm({ name:e.name, position:e.position, baseSalary:String(e.baseSalary), startDate:e.startDate, active:e.active, hasSSO:e.hasSSO, whtRate:String(e.whtRate) });
+    setShowEmpForm(true);
+  }
+  function saveEmployeeForm() {
+    if (!empForm.name.trim() || !empForm.baseSalary || +empForm.baseSalary<=0) { showToast("กรอกชื่อและเงินเดือนฐาน","err"); return; }
+    const payload: Omit<Employee,"id"> = {
+      name: empForm.name.trim(), position: empForm.position.trim(),
+      baseSalary: +empForm.baseSalary, startDate: empForm.startDate,
+      active: empForm.active, hasSSO: empForm.hasSSO, whtRate: +empForm.whtRate || 0,
+    };
+    if (editEmpId) {
+      saveEmployees(employees.map(e=>e.id===editEmpId?{...e,...payload}:e));
+      showToast("แก้ไขพนักงานสำเร็จ");
+    } else {
+      saveEmployees([...employees, { id: Date.now(), ...payload }]);
+      showToast("เพิ่มพนักงานสำเร็จ");
+    }
+    setShowEmpForm(false);
+  }
+  function deleteEmployeeFn(id: number) {
+    saveEmployees(employees.filter(e=>e.id!==id));
+    showToast("ลบพนักงานแล้ว","err");
+  }
+
+  // ===== Recurring template CRUD =====
+  function openAddRecurring() {
+    setEditRecId(null);
+    setRecForm({ kind:"staff", category:STAFF_OH_CATS[4], description:"", amount:"", project:"", employeeId:"", dayOfMonth:"1", hasVat:false, hasWht:false, whtRate:3, active:true });
+    setShowRecForm(true);
+  }
+  function openEditRecurring(r: RecurringTemplate) {
+    setEditRecId(r.id);
+    setRecForm({ kind:r.kind, category:r.category, description:r.description, amount:String(r.amount), project:r.project||"", employeeId:r.employeeId?String(r.employeeId):"", dayOfMonth:String(r.dayOfMonth), hasVat:r.hasVat, hasWht:r.hasWht, whtRate:r.whtRate, active:r.active });
+    setShowRecForm(true);
+  }
+  function saveRecurringForm() {
+    if (!recForm.category || !recForm.amount || +recForm.amount<=0) { showToast("กรอกหมวด + จำนวนเงิน","err"); return; }
+    if (recForm.kind==="project" && !recForm.project) { showToast("เลือกโครงการ","err"); return; }
+    const payload: Omit<RecurringTemplate,"id"|"lastGeneratedMonth"> = {
+      kind: recForm.kind, category: recForm.category, description: recForm.description.trim(),
+      amount: +recForm.amount,
+      project: recForm.kind==="project" ? recForm.project : undefined,
+      employeeId: recForm.employeeId ? +recForm.employeeId : undefined,
+      dayOfMonth: Math.max(1, Math.min(31, +recForm.dayOfMonth || 1)),
+      hasVat: recForm.hasVat, hasWht: recForm.hasWht, whtRate: recForm.whtRate,
+      active: recForm.active,
+    };
+    if (editRecId) {
+      const prev = recurringTemplates.find(r=>r.id===editRecId);
+      saveRecurringTemplates(recurringTemplates.map(r=>r.id===editRecId?{...prev!,...payload}:r));
+      showToast("แก้ไขรายการประจำสำเร็จ");
+    } else {
+      saveRecurringTemplates([...recurringTemplates, { id: Date.now(), ...payload }]);
+      showToast("เพิ่มรายการประจำสำเร็จ");
+    }
+    setShowRecForm(false);
+  }
+  function deleteRecurringFn(id: number) {
+    saveRecurringTemplates(recurringTemplates.filter(r=>r.id!==id));
+    showToast("ลบรายการประจำแล้ว","err");
+  }
+
+  // ===== Salary generation =====
+  function currentYearMonth(): string {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`;
+  }
+  function generatePayrollForMonth(yearMonth: string) {
+    const newEntries: OverheadEntry[] = [];
+    let skipped = 0;
+    for (const emp of employees.filter(e=>e.active)) {
+      const exists = overheads.some(o => o.employeeId===emp.id && o.yearMonth===yearMonth && o.category==="เงินเดือนพนักงาน");
+      if (exists) { skipped++; continue; }
+      const sso = calcSso(emp.baseSalary, emp.hasSSO);
+      const whtAmt = emp.baseSalary * (emp.whtRate/100);
+      const netPay = emp.baseSalary - sso.employee - whtAmt;
+      // Salary entry (gross paid; WHT flows into tax remittance)
+      newEntries.push({
+        id: Date.now() + Math.random(),
+        kind: "staff", date: `${yearMonth}-01`,
+        category: "เงินเดือนพนักงาน",
+        description: `เงินเดือน ${emp.name} (${yearMonth})`,
+        amount: emp.baseSalary, employeeId: emp.id,
+        status: "pending",
+        hasVat: false, hasWht: emp.whtRate>0, whtRate: emp.whtRate,
+        vat: 0, wht: whtAmt,
+        baseSalary: emp.baseSalary, ssoEmployee: sso.employee, ssoEmployer: sso.employer, netPay,
+        yearMonth,
+      });
+      // SSO employer entry (additional company cost)
+      if (sso.employer > 0) {
+        newEntries.push({
+          id: Date.now() + Math.random() + 1,
+          kind: "staff", date: `${yearMonth}-01`,
+          category: "ประกันสังคม (นายจ้างสมทบ)",
+          description: `SSO นายจ้าง ${emp.name} (${yearMonth})`,
+          amount: sso.employer, employeeId: emp.id,
+          status: "pending",
+          hasVat: false, hasWht: false,
+          yearMonth,
+        });
+      }
+    }
+    if (newEntries.length === 0) {
+      showToast(skipped>0?`payroll เดือน ${yearMonth} ครบแล้ว`:"ยังไม่มีพนักงาน active","err");
+      return;
+    }
+    saveOverheads([...overheads, ...newEntries]);
+    showToast(`สร้าง payroll ${yearMonth}: ${newEntries.length} รายการ ✅`);
+  }
+
+  // ===== Auto-generate recurring on app load (once per session) =====
+  const autoGenRef = useRef(false);
+  useEffect(() => {
+    if (loading || autoGenRef.current) return;
+    autoGenRef.current = true;
+    const ym = currentYearMonth();
+    const newEntries: OverheadEntry[] = [];
+    const updated = recurringTemplates.map(t => {
+      if (!t.active || t.lastGeneratedMonth === ym) return t;
+      const [y, m] = ym.split("-").map(Number);
+      const daysInMonth = new Date(y, m, 0).getDate();
+      const day = Math.min(t.dayOfMonth, daysInMonth);
+      const entryDate = `${ym}-${String(day).padStart(2,"0")}`;
+      const amount = t.employeeId
+        ? (employees.find(e=>e.id===t.employeeId)?.baseSalary || t.amount)
+        : t.amount;
+      const vat = t.hasVat ? amount*VAT_RATE : 0;
+      const wht = t.hasWht ? amount*(t.whtRate/100) : 0;
+      newEntries.push({
+        id: Date.now() + Math.random(),
+        kind: t.kind, date: entryDate, category: t.category,
+        description: t.description || `${t.category} (${ym})`,
+        amount, project: t.project, employeeId: t.employeeId,
+        status: "pending",
+        hasVat: t.hasVat, hasWht: t.hasWht, whtRate: t.whtRate, vat, wht,
+        recurringFromId: t.id, yearMonth: ym,
+      });
+      return { ...t, lastGeneratedMonth: ym };
+    });
+    if (newEntries.length > 0) {
+      saveOverheads([...overheads, ...newEntries]);
+      saveRecurringTemplates(updated);
+      showToast(`สร้างรายการประจำ ${ym}: ${newEntries.length} รายการ`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
+
+  // ===== Migrate legacy expense entries with OVERHEAD_CATS → OverheadEntry =====
+  const migratedRef = useRef(false);
+  useEffect(() => {
+    if (loading || migratedRef.current) return;
+    if (localStorage.getItem("wf_overhead_migrated") === "1") { migratedRef.current = true; return; }
+    migratedRef.current = true;
+    const legacy = entries.filter(e => e.type === "expense" && OVERHEAD_CATS.has(e.category));
+    if (legacy.length === 0) { localStorage.setItem("wf_overhead_migrated","1"); return; }
+    const newOh: OverheadEntry[] = legacy.map(e => ({
+      id: Date.now() + Math.random(),
+      kind: "staff",
+      date: e.date, category: e.category, description: e.description, amount: e.amount,
+      status: "paid", paidDate: e.date,
+      vat: e.vat, wht: e.wht, hasVat: !!e.vat, hasWht: !!e.wht,
+      whtRate: e.wht && e.amount>0 ? Math.round((e.wht/e.amount)*100*10)/10 : 3,
+    }));
+    saveOverheads([...overheads, ...newOh]);
+    localStorage.setItem("wf_overhead_migrated","1");
+    showToast(`โอน ${legacy.length} รายการเก่าเป็น overhead`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, entries]);
 
   function addInstallment() {
     if (!instForm.project || !instForm.name || !instForm.amount || !instForm.dueDate || !instForm.workCategory) { showToast("กรอกข้อมูลให้ครบ", "err"); return; }
@@ -2145,6 +2339,13 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Management action bar */}
+              <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+                <button className="btn btn-outline" style={{ flex:"1 1 auto",fontSize:12,padding:"9px 12px" }} onClick={()=>setShowEmpMgr(true)}>👥 ทีมงาน ({employees.filter(e=>e.active).length})</button>
+                <button className="btn btn-outline" style={{ flex:"1 1 auto",fontSize:12,padding:"9px 12px" }} onClick={()=>setShowRecMgr(true)}>🔁 รายการประจำ ({recurringTemplates.filter(r=>r.active).length})</button>
+                <button className="btn btn-green" style={{ flex:"1 1 auto",fontSize:12,padding:"9px 12px" }} onClick={()=>generatePayrollForMonth(currentYearMonth())}>💰 รัน Payroll เดือนนี้</button>
+              </div>
+
               {/* Add button */}
               <button className="btn btn-primary" style={{ width:"100%",padding:14,fontSize:15 }} onClick={()=>openAddOverhead(ohTab)}>
                 + เพิ่ม{ohTab==="project"?"Project Overhead":"Staff Overhead"}
@@ -2809,6 +3010,205 @@ export default function App() {
                   <button className="btn btn-ghost" onClick={()=>setShowOhForm(false)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
                   <button className="btn btn-primary" onClick={saveOverheadForm} style={{ flex:2,padding:13 }}>{editOhId?"บันทึกการแก้ไข":"บันทึก"}</button>
                 </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* EMPLOYEE MANAGER MODAL */}
+      {showEmpMgr&&(
+        <div className="modal-bg" onClick={()=>setShowEmpMgr(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14 }}>
+              <div style={{ fontWeight:800,fontSize:18 }}>👥 จัดการทีมงาน</div>
+              <button onClick={()=>setShowEmpMgr(false)} style={{ width:30,height:30,borderRadius:8,border:"none",background:"#f1f5f9",fontSize:16,fontWeight:700,cursor:"pointer",color:"#475569" }}>✕</button>
+            </div>
+            <button className="btn btn-green" onClick={openAddEmployee} style={{ width:"100%",padding:11,fontSize:13,marginBottom:12 }}>+ เพิ่มพนักงานใหม่</button>
+            {employees.length===0?(
+              <div style={{ textAlign:"center",color:"#94a3b8",padding:"24px 0",fontSize:13 }}>ยังไม่มีพนักงาน</div>
+            ):(
+              <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                {employees.map(e=>{
+                  const sso = calcSso(e.baseSalary, e.hasSSO);
+                  const whtAmt = e.baseSalary * (e.whtRate/100);
+                  const net = e.baseSalary - sso.employee - whtAmt;
+                  return (
+                    <div key={e.id} style={{ background:"#f8fafc",borderRadius:12,padding:"12px 14px",border:`1.5px solid ${e.active?"#e2e8f0":"#fee2e2"}` }}>
+                      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6 }}>
+                        <div style={{ flex:1,minWidth:0 }}>
+                          <div style={{ fontWeight:700,fontSize:14,color:e.active?"#0f172a":"#94a3b8" }}>👤 {e.name}{!e.active&&" (ไม่ active)"}</div>
+                          {e.position&&<div style={{ fontSize:11,color:"#64748b",marginTop:2 }}>{e.position}</div>}
+                        </div>
+                        <div className="num" style={{ fontSize:15,fontWeight:800,color:"#0f172a",whiteSpace:"nowrap" }}>฿{fmt(e.baseSalary)}</div>
+                      </div>
+                      <div style={{ fontSize:11,color:"#64748b",lineHeight:1.6,paddingTop:6,borderTop:"1px dashed #e2e8f0" }}>
+                        SSO: <b>{e.hasSSO?`฿${fmt(sso.employee)}`:"ไม่หัก"}</b> · WHT: <b>{e.whtRate}% (฿{fmt(whtAmt)})</b> · สุทธิ: <b style={{ color:"#15803d" }}>฿{fmt(net)}</b>
+                      </div>
+                      <div style={{ display:"flex",gap:6,marginTop:8 }}>
+                        <button className="btn btn-outline" onClick={()=>openEditEmployee(e)} style={{ flex:1,fontSize:12,padding:7 }}>✏️ แก้ไข</button>
+                        <button className="btn btn-red" onClick={()=>setDeleteEmpId(e.id)} style={{ flex:1,fontSize:12,padding:7 }}>🗑️ ลบ</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* EMPLOYEE FORM MODAL */}
+      {showEmpForm&&(
+        <div className="modal-bg" onClick={()=>setShowEmpForm(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+            <div style={{ fontWeight:800,fontSize:18,marginBottom:16 }}>{editEmpId?"✏️ แก้ไขพนักงาน":"➕ เพิ่มพนักงาน"}</div>
+            <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+              <div><label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>ชื่อ-นามสกุล *</label><input type="text" value={empForm.name} onChange={e=>setEmpForm(f=>({...f,name:e.target.value}))}/></div>
+              <div><label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>ตำแหน่ง</label><input type="text" placeholder="เช่น สถาปนิก, โฟร์แมน" value={empForm.position} onChange={e=>setEmpForm(f=>({...f,position:e.target.value}))}/></div>
+              <div><label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>เงินเดือนฐาน (บาท/เดือน) *</label><input type="text" inputMode="decimal" placeholder="0.00" value={formatThousand(empForm.baseSalary)} onChange={e=>{ const raw=parseThousand(e.target.value); if (/^\d*\.?\d*$/.test(raw)) setEmpForm(f=>({...f,baseSalary:raw})); }}/></div>
+              <div><label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>วันที่เริ่มงาน</label><input type="date" value={empForm.startDate} onChange={e=>setEmpForm(f=>({...f,startDate:e.target.value}))}/></div>
+              <button type="button" onClick={()=>setEmpForm(f=>({...f,hasSSO:!f.hasSSO}))} className="checkbox-row" style={{ cursor:"pointer" }}>
+                <div style={{ width:22,height:22,borderRadius:6,background:empForm.hasSSO?"#15803d":"#fff",border:`2px solid ${empForm.hasSSO?"#15803d":"#cbd5e1"}`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:800 }}>{empForm.hasSSO?"✓":""}</div>
+                <div style={{ flex:1,fontSize:14,fontWeight:600,color:empForm.hasSSO?"#15803d":"#475569",textAlign:"left" }}>หักประกันสังคม (5% cap ฿15,000 = ฿750)</div>
+              </button>
+              <div><label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>WHT (%) ภาษีหัก ณ ที่จ่าย</label><input type="number" min="0" max="50" step="0.5" value={empForm.whtRate} onChange={e=>setEmpForm(f=>({...f,whtRate:e.target.value}))}/></div>
+              <button type="button" onClick={()=>setEmpForm(f=>({...f,active:!f.active}))} className="checkbox-row" style={{ cursor:"pointer" }}>
+                <div style={{ width:22,height:22,borderRadius:6,background:empForm.active?"#1e40af":"#fff",border:`2px solid ${empForm.active?"#1e40af":"#cbd5e1"}`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:800 }}>{empForm.active?"✓":""}</div>
+                <div style={{ flex:1,fontSize:14,fontWeight:600,color:empForm.active?"#1e40af":"#475569",textAlign:"left" }}>พนักงานยัง active (รวมใน payroll)</div>
+              </button>
+              <div style={{ display:"flex",gap:10,marginTop:4 }}>
+                <button className="btn btn-ghost" onClick={()=>setShowEmpForm(false)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
+                <button className="btn btn-primary" onClick={saveEmployeeForm} style={{ flex:2,padding:13 }}>{editEmpId?"บันทึกการแก้ไข":"เพิ่มพนักงาน"}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE EMPLOYEE CONFIRM */}
+      {deleteEmpId!==null&&(()=>{
+        const e = employees.find(x=>x.id===deleteEmpId);
+        if (!e) return null;
+        return (
+          <div className="modal-bg" onClick={()=>setDeleteEmpId(null)}>
+            <div className="modal" onClick={ev=>ev.stopPropagation()}>
+              <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+              <div style={{ fontSize:36,textAlign:"center",marginBottom:10 }}>🗑️</div>
+              <div style={{ fontWeight:800,fontSize:17,textAlign:"center",marginBottom:8 }}>ลบพนักงาน?</div>
+              <div style={{ color:"#64748b",textAlign:"center",marginBottom:14,fontSize:13 }}>{e.name} · ฿{fmt(e.baseSalary)}/เดือน<br/><span style={{ fontSize:11,color:"#94a3b8" }}>รายการเงินเดือนที่สร้างไว้แล้วยังคงอยู่</span></div>
+              <div style={{ display:"flex",gap:10 }}>
+                <button className="btn btn-ghost" onClick={()=>setDeleteEmpId(null)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
+                <button className="btn btn-red" onClick={()=>{ deleteEmployeeFn(e.id); setDeleteEmpId(null); }} style={{ flex:1,padding:13,fontSize:14 }}>ลบ</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* RECURRING MANAGER MODAL */}
+      {showRecMgr&&(
+        <div className="modal-bg" onClick={()=>setShowRecMgr(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14 }}>
+              <div style={{ fontWeight:800,fontSize:18 }}>🔁 รายการประจำ</div>
+              <button onClick={()=>setShowRecMgr(false)} style={{ width:30,height:30,borderRadius:8,border:"none",background:"#f1f5f9",fontSize:16,fontWeight:700,cursor:"pointer",color:"#475569" }}>✕</button>
+            </div>
+            <div style={{ fontSize:11,color:"#64748b",marginBottom:10 }}>ระบบจะสร้างรายการตามนี้ให้อัตโนมัติทุกเดือน</div>
+            <button className="btn btn-green" onClick={openAddRecurring} style={{ width:"100%",padding:11,fontSize:13,marginBottom:12 }}>+ เพิ่มรายการประจำ</button>
+            {recurringTemplates.length===0?(
+              <div style={{ textAlign:"center",color:"#94a3b8",padding:"24px 0",fontSize:13 }}>ยังไม่มีรายการประจำ</div>
+            ):(
+              <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                {recurringTemplates.map(r=>(
+                  <div key={r.id} style={{ background:"#f8fafc",borderRadius:12,padding:"12px 14px",border:`1.5px solid ${r.active?"#e2e8f0":"#fef3c7"}` }}>
+                    <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:6 }}>
+                      <div style={{ flex:1,minWidth:0 }}>
+                        <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:3 }}>
+                          <span className="tag">{r.kind==="project"?"📊":"👥"} {r.category}</span>
+                          {!r.active&&<span className="badge badge-pending">หยุด</span>}
+                        </div>
+                        {r.description&&<div style={{ fontSize:12,color:"#475569",marginBottom:2 }}>{r.description}</div>}
+                        <div style={{ fontSize:11,color:"#64748b" }}>📅 ทุกวันที่ {r.dayOfMonth}{r.project?` · 📁 ${r.project}`:""}</div>
+                      </div>
+                      <div className="num" style={{ fontSize:15,fontWeight:800,color:"#0f172a",whiteSpace:"nowrap" }}>฿{fmt(r.amount)}</div>
+                    </div>
+                    <div style={{ display:"flex",gap:6,marginTop:8 }}>
+                      <button className="btn btn-outline" onClick={()=>openEditRecurring(r)} style={{ flex:1,fontSize:12,padding:7 }}>✏️ แก้ไข</button>
+                      <button className="btn btn-red" onClick={()=>setDeleteRecId(r.id)} style={{ flex:1,fontSize:12,padding:7 }}>🗑️ ลบ</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* RECURRING FORM MODAL */}
+      {showRecForm&&(()=>{
+        const cats = recForm.kind==="project"?PROJECT_OH_CATS:STAFF_OH_CATS;
+        return (
+          <div className="modal-bg" onClick={()=>setShowRecForm(false)}>
+            <div className="modal" onClick={e=>e.stopPropagation()}>
+              <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+              <div style={{ fontWeight:800,fontSize:18,marginBottom:16 }}>{editRecId?"✏️ แก้ไขรายการประจำ":"➕ เพิ่มรายการประจำ"}</div>
+              <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+                <div>
+                  <label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>หมวดงาน</label>
+                  <div style={{ display:"flex",borderRadius:12,overflow:"hidden",border:"1.5px solid #e2e8f0" }}>
+                    {[{v:"project" as OverheadKind,l:"📊 Project"},{v:"staff" as OverheadKind,l:"👥 Staff"}].map(t=>(
+                      <button key={t.v} onClick={()=>setRecForm(f=>({...f,kind:t.v,category:t.v==="project"?PROJECT_OH_CATS[0]:STAFF_OH_CATS[0]}))} style={{ flex:1,padding:11,border:"none",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,background:recForm.kind===t.v?"#1e40af":"transparent",color:recForm.kind===t.v?"#fff":"#94a3b8" }}>{t.l}</button>
+                    ))}
+                  </div>
+                </div>
+                <div><label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>หมวด</label><select value={recForm.category} onChange={e=>setRecForm(f=>({...f,category:e.target.value}))}>{cats.map(c=><option key={c}>{c}</option>)}</select></div>
+                {recForm.kind==="project"&&(<div><label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>โครงการ</label><select value={recForm.project} onChange={e=>setRecForm(f=>({...f,project:e.target.value}))}><option value="">— เลือกโครงการ —</option>{projects.map(p=><option key={p}>{p}</option>)}</select></div>)}
+                <div><label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>รายละเอียด</label><input type="text" placeholder="เช่น ค่าเช่าออฟฟิศชั้น 5" value={recForm.description} onChange={e=>setRecForm(f=>({...f,description:e.target.value}))}/></div>
+                <div><label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>จำนวนเงิน/เดือน (บาท)</label><input type="text" inputMode="decimal" placeholder="0.00" value={formatThousand(recForm.amount)} onChange={e=>{ const raw=parseThousand(e.target.value); if (/^\d*\.?\d*$/.test(raw)) setRecForm(f=>({...f,amount:raw})); }}/></div>
+                <div><label style={{ fontSize:12,color:"#94a3b8",fontWeight:700,display:"block",marginBottom:6 }}>วันที่ของเดือน (1-31)</label><input type="number" min="1" max="31" value={recForm.dayOfMonth} onChange={e=>setRecForm(f=>({...f,dayOfMonth:e.target.value}))}/></div>
+                <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                  <button type="button" onClick={()=>setRecForm(f=>({...f,hasVat:!f.hasVat}))} className="checkbox-row" style={{ cursor:"pointer" }}>
+                    <div style={{ width:22,height:22,borderRadius:6,background:recForm.hasVat?"#15803d":"#fff",border:`2px solid ${recForm.hasVat?"#15803d":"#cbd5e1"}`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:800 }}>{recForm.hasVat?"✓":""}</div>
+                    <div style={{ flex:1,fontSize:14,fontWeight:600,color:recForm.hasVat?"#15803d":"#475569",textAlign:"left" }}>VAT 7%</div>
+                  </button>
+                  <button type="button" onClick={()=>setRecForm(f=>({...f,hasWht:!f.hasWht}))} className="checkbox-row" style={{ cursor:"pointer" }}>
+                    <div style={{ width:22,height:22,borderRadius:6,background:recForm.hasWht?"#dc2626":"#fff",border:`2px solid ${recForm.hasWht?"#dc2626":"#cbd5e1"}`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:800 }}>{recForm.hasWht?"✓":""}</div>
+                    <div style={{ flex:1,fontSize:14,fontWeight:600,color:recForm.hasWht?"#dc2626":"#475569",textAlign:"left" }}>หัก ณ ที่จ่าย {recForm.hasWht?recForm.whtRate:""}{recForm.hasWht?"%":""}</div>
+                    {recForm.hasWht&&(<input type="number" min="0" max="50" step="0.5" value={recForm.whtRate} onChange={e=>setRecForm(f=>({...f,whtRate:+e.target.value}))} onClick={e=>e.stopPropagation()} style={{ width:64,padding:"6px 8px",fontSize:13,textAlign:"center" }}/>)}
+                  </button>
+                  <button type="button" onClick={()=>setRecForm(f=>({...f,active:!f.active}))} className="checkbox-row" style={{ cursor:"pointer" }}>
+                    <div style={{ width:22,height:22,borderRadius:6,background:recForm.active?"#1e40af":"#fff",border:`2px solid ${recForm.active?"#1e40af":"#cbd5e1"}`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontSize:14,fontWeight:800 }}>{recForm.active?"✓":""}</div>
+                    <div style={{ flex:1,fontSize:14,fontWeight:600,color:recForm.active?"#1e40af":"#475569",textAlign:"left" }}>กำลังทำงาน (auto-gen ทุกเดือน)</div>
+                  </button>
+                </div>
+                <div style={{ display:"flex",gap:10,marginTop:4 }}>
+                  <button className="btn btn-ghost" onClick={()=>setShowRecForm(false)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
+                  <button className="btn btn-primary" onClick={saveRecurringForm} style={{ flex:2,padding:13 }}>{editRecId?"บันทึกการแก้ไข":"บันทึก"}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* DELETE RECURRING CONFIRM */}
+      {deleteRecId!==null&&(()=>{
+        const r = recurringTemplates.find(x=>x.id===deleteRecId);
+        if (!r) return null;
+        return (
+          <div className="modal-bg" onClick={()=>setDeleteRecId(null)}>
+            <div className="modal" onClick={e=>e.stopPropagation()}>
+              <div style={{ width:40,height:4,background:"#e0e0e0",borderRadius:2,margin:"0 auto 20px" }}/>
+              <div style={{ fontSize:36,textAlign:"center",marginBottom:10 }}>🗑️</div>
+              <div style={{ fontWeight:800,fontSize:17,textAlign:"center",marginBottom:8 }}>ลบรายการประจำ?</div>
+              <div style={{ color:"#64748b",textAlign:"center",marginBottom:14,fontSize:13 }}>{r.category}<br/>{r.description}<br/>฿{fmt(r.amount)}/เดือน</div>
+              <div style={{ display:"flex",gap:10 }}>
+                <button className="btn btn-ghost" onClick={()=>setDeleteRecId(null)} style={{ flex:1,padding:13 }}>ยกเลิก</button>
+                <button className="btn btn-red" onClick={()=>{ deleteRecurringFn(r.id); setDeleteRecId(null); }} style={{ flex:1,padding:13,fontSize:14 }}>ลบ</button>
               </div>
             </div>
           </div>
