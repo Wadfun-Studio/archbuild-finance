@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, type ReactNode } from "react";
 
-const DEFAULT_API = "https://script.google.com/macros/s/AKfycbzCUVLVzXjRWSQri8XTjOrFh373mp_dU3PkCTODGPhyX1bsYNMWf1CxhS79ntUDer5IwA/exec";
+const DEFAULT_API = "https://script.google.com/macros/s/AKfycbyZnwJx1GgQgU_OCqLQFaN4zB5i51yExJowu3XSwqiikfMOihodB6znLrNJAa0OvNOpbA/exec";
 const API_URL_KEY = "wf_api_url";
 function getApiUrl(): string {
   try { return localStorage.getItem(API_URL_KEY) || DEFAULT_API; } catch { return DEFAULT_API; }
