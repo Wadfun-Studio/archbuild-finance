@@ -366,6 +366,94 @@ interface Installment { id: number; kind: InstKind; scope: InstScope; workCatego
 interface FormState { date: string; type: string; category: string; project: string; description: string; amount: string; useVat: boolean; useWht: boolean; }
 interface InstForm { kind: InstKind; scope: InstScope; workCategory: string; project: string; name: string; description: string; amount: string; dueDate: string; }
 
+// ============ Overhead module ============
+type OverheadKind = "project" | "staff";
+type OverheadStatus = "pending" | "paid";
+
+const PROJECT_OH_CATS = [
+  "ค่า commission",
+  "ค่าการตลาดโครงการ",
+  "ค่าที่ปรึกษาดีล",
+  "ค่ารับรอง/Entertaining",
+  "อื่นๆ (โครงการ)",
+];
+const STAFF_OH_CATS = [
+  "เงินเดือนพนักงาน",
+  "ประกันสังคม (นายจ้างสมทบ)",
+  "โบนัส",
+  "OT/ค่าล่วงเวลา",
+  "ค่าเช่าออฟฟิศ",
+  "ค่าซอฟต์แวร์/ใบอนุญาต",
+  "ค่าน้ำ-ไฟ",
+  "ค่าการตลาดทั่วไป",
+  "ค่าเดินทาง",
+  "ค่ารับรอง",
+  "อื่นๆ (ออฟฟิศ)",
+];
+
+interface OverheadEntry {
+  id: number;
+  kind: OverheadKind;
+  date: string;
+  category: string;
+  description: string;
+  amount: number;
+  project?: string;               // required if kind==="project"
+  employeeId?: number;            // for staff salary entries
+  status: OverheadStatus;
+  paidDate?: string;
+  vat?: number;
+  wht?: number;
+  hasVat?: boolean;
+  hasWht?: boolean;
+  whtRate?: number;
+  // Salary breakdown (only when this is a generated salary entry)
+  baseSalary?: number;
+  ssoEmployee?: number;
+  ssoEmployer?: number;
+  netPay?: number;
+  // Generation lineage
+  recurringFromId?: number;
+  yearMonth?: string;             // YYYY-MM — used to prevent duplicate monthly generations
+}
+
+interface Employee {
+  id: number;
+  name: string;
+  position: string;
+  baseSalary: number;
+  startDate: string;
+  active: boolean;
+  hasSSO: boolean;
+  whtRate: number;                // % WHT applied to salary
+}
+
+interface RecurringTemplate {
+  id: number;
+  kind: OverheadKind;
+  category: string;
+  description: string;
+  amount: number;                 // ignored if employeeId is set (uses Employee.baseSalary instead)
+  project?: string;
+  employeeId?: number;
+  dayOfMonth: number;             // 1-31 — clamped to month length at gen time
+  hasVat: boolean;
+  hasWht: boolean;
+  whtRate: number;
+  active: boolean;
+  lastGeneratedMonth?: string;    // YYYY-MM
+}
+
+// Thailand social-security: 5% of capped base ฿15,000 → max ฿750 each side
+const SSO_BASE_CAP = 15000;
+const SSO_RATE = 0.05;
+function calcSso(baseSalary: number, hasSSO: boolean) {
+  if (!hasSSO) return { employee: 0, employer: 0 };
+  const eligible = Math.min(baseSalary, SSO_BASE_CAP);
+  const amount = Math.round(eligible * SSO_RATE);
+  return { employee: amount, employer: amount };
+}
+
 const defaultScopeTax: ProjectScopeTax = { hasVat: false, hasWht: false, whtRate: 3 };
 const defaultTaxSettings: ProjectTaxSettings = { design: { ...defaultScopeTax }, construction: { ...defaultScopeTax } };
 
@@ -431,6 +519,9 @@ export default function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [installments, setInstallments] = useState<Installment[]>([]);
+  const [overheads, setOverheads] = useState<OverheadEntry[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [recurringTemplates, setRecurringTemplates] = useState<RecurringTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string|null>(null);
@@ -447,6 +538,7 @@ export default function App() {
   const [showInstForm, setShowInstForm] = useState(false);
   const [instForm, setInstForm] = useState<InstForm>({ kind:"receivable", scope:"design", workCategory: WORK_CATS_BY_SCOPE.design[0], project:"", name:"งวดที่ 1", description:"", amount:"", dueDate:"" });
   const [instTab, setInstTab] = useState<InstKind>("receivable");
+  const [ohTab, setOhTab] = useState<OverheadKind>("project");
   const [activeScope, setActiveScope] = useState<InstScope>("design");
   const [deleteInstId, setDeleteInstId] = useState<number|null>(null);
   // PIN state — only for the dashboard view (auto-clears on tab change)
@@ -571,6 +663,19 @@ export default function App() {
         for (const [k,v] of Object.entries(parsed)) migrated[k] = normalizeTaxSettings(v);
         setProjectTax(migrated);
       }
+      // load overhead module from localStorage
+      const ohSaved = localStorage.getItem("wf_overhead_entries");
+      if (ohSaved) {
+        try { setOverheads(JSON.parse(ohSaved) as OverheadEntry[]); } catch { /* ignore corrupt */ }
+      }
+      const empSaved = localStorage.getItem("wf_employees");
+      if (empSaved) {
+        try { setEmployees(JSON.parse(empSaved) as Employee[]); } catch { /* ignore corrupt */ }
+      }
+      const recSaved = localStorage.getItem("wf_recurring_templates");
+      if (recSaved) {
+        try { setRecurringTemplates(JSON.parse(recSaved) as RecurringTemplate[]); } catch { /* ignore corrupt */ }
+      }
     } catch { setError("เชื่อมต่อไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ต"); }
     setLoading(false);
   }, []);
@@ -618,6 +723,19 @@ export default function App() {
   function saveInstallments(list: Installment[]) {
     setInstallments(list);
     localStorage.setItem("wf_installments", JSON.stringify(list));
+  }
+
+  function saveOverheads(list: OverheadEntry[]) {
+    setOverheads(list);
+    localStorage.setItem("wf_overhead_entries", JSON.stringify(list));
+  }
+  function saveEmployees(list: Employee[]) {
+    setEmployees(list);
+    localStorage.setItem("wf_employees", JSON.stringify(list));
+  }
+  function saveRecurringTemplates(list: RecurringTemplate[]) {
+    setRecurringTemplates(list);
+    localStorage.setItem("wf_recurring_templates", JSON.stringify(list));
   }
 
   function addInstallment() {
@@ -1927,6 +2045,60 @@ export default function App() {
           </div>
         )}
 
+        {/* OVERHEAD TAB — shell only, content added in later batches */}
+        {view==="overhead"&&(()=>{
+          const scopedList = overheads.filter(o=>o.kind===ohTab).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+          const pending = scopedList.filter(o=>o.status==="pending");
+          const paid = scopedList.filter(o=>o.status==="paid");
+          const pendingTotal = pending.reduce((s,o)=>s+o.amount,0);
+          const paidTotal = paid.reduce((s,o)=>s+o.amount,0);
+          return (
+            <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
+              {/* Sub-tabs */}
+              <div style={{ display:"flex",background:"#fff",borderRadius:14,padding:4,boxShadow:"0 1px 4px rgba(15,23,42,.06)" }}>
+                {([
+                  { v:"project" as OverheadKind, l:"📊 Project Overhead", desc:"ผูกกับโครงการ" },
+                  { v:"staff" as OverheadKind,   l:"👥 Staff Overhead",  desc:"พนักงาน + ออฟฟิศ" },
+                ]).map(t=>{
+                  const cnt = overheads.filter(o=>o.kind===t.v&&o.status==="pending").length;
+                  const active = ohTab===t.v;
+                  return (
+                    <button key={t.v} onClick={()=>setOhTab(t.v)} style={{ flex:1,padding:"12px 10px",border:"none",borderRadius:10,cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,background:active?"linear-gradient(135deg,#1e40af 0%,#2952c8 100%)":"transparent",color:active?"#fff":"#64748b",letterSpacing:".01em",boxShadow:active?"0 4px 14px rgba(30,64,175,.32)":"none",transition:"all .15s" }}>
+                      {t.l}{cnt>0&&<span style={{ marginLeft:6,background:active?"rgba(255,255,255,.25)":"#f1f5f9",padding:"1px 7px",borderRadius:10,fontSize:11 }}>{cnt}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Summary cards */}
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+                <div className="card" style={{ padding:14,background:"linear-gradient(135deg,#fef3c7 0%,#fffbeb 100%)",border:"none" }}>
+                  <div style={{ fontSize:11,color:"#b45309",fontWeight:600,marginBottom:3 }}>⏳ ยังไม่จ่าย</div>
+                  <div className="num" style={{ fontSize:18,fontWeight:800,color:"#b45309" }}>฿{fmt(pendingTotal)}</div>
+                  <div style={{ fontSize:11,color:"#94a3b8",marginTop:2 }}>{pending.length} รายการ</div>
+                </div>
+                <div className="card" style={{ padding:14,background:"linear-gradient(135deg,#dcfce7 0%,#f0fdf4 100%)",border:"none" }}>
+                  <div style={{ fontSize:11,color:"#15803d",fontWeight:600,marginBottom:3 }}>✅ จ่ายแล้ว</div>
+                  <div className="num" style={{ fontSize:18,fontWeight:800,color:"#15803d" }}>฿{fmt(paidTotal)}</div>
+                  <div style={{ fontSize:11,color:"#94a3b8",marginTop:2 }}>{paid.length} รายการ</div>
+                </div>
+              </div>
+
+              {/* Placeholder content — CRUD comes in next batch */}
+              <div className="card" style={{ padding:24,textAlign:"center",color:"#94a3b8" }}>
+                <div style={{ fontSize:32,marginBottom:8 }}>🚧</div>
+                <div style={{ fontSize:14,fontWeight:600,color:"#475569",marginBottom:6 }}>
+                  {ohTab==="project"?"Project Overhead":"Staff Overhead"} — กำลังทยอยเพิ่ม
+                </div>
+                <div style={{ fontSize:12,lineHeight:1.6 }}>
+                  Batch 1 (โครงสร้างข้อมูล) เสร็จแล้ว ✅<br/>
+                  ปุ่ม + เพิ่ม / รายการ / ฟอร์ม จะมาใน Batch 3-7
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* PROJECT MANAGE (DANGER ZONE) */}
         {view==="project-manage"&&(
           <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
@@ -2013,7 +2185,7 @@ export default function App() {
 
       {/* BOTTOM NAV */}
       <div className="bottom-nav">
-        {[{k:"dashboard",icon:"📊",l:"ภาพรวม"},{k:"installments",icon:"📁",l:"โครงการ"}].map(n=>(
+        {[{k:"dashboard",icon:"📊",l:"ภาพรวม"},{k:"installments",icon:"📁",l:"โครงการ"},{k:"overhead",icon:"💼",l:"Overhead"}].map(n=>(
           <button key={n.k} className={`bnav-btn${view===n.k?" active":""}`} onClick={()=>setView(n.k)}>
             <span>{n.icon}</span>{n.l}
             {n.k==="installments"&&urgentInst.length>0&&<div style={{ position:"absolute",top:6,background:"#c62828",color:"#fff",borderRadius:50,width:16,height:16,fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700 }}>{urgentInst.length}</div>}
