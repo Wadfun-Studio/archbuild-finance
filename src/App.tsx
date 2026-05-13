@@ -1,6 +1,10 @@
 import { useState, useMemo, useEffect, useCallback, type ReactNode } from "react";
 
-const API = "https://script.google.com/macros/s/AKfycbzCUVLVzXjRWSQri8XTjOrFh373mp_dU3PkCTODGPhyX1bsYNMWf1CxhS79ntUDer5IwA/exec";
+const DEFAULT_API = "https://script.google.com/macros/s/AKfycbzCUVLVzXjRWSQri8XTjOrFh373mp_dU3PkCTODGPhyX1bsYNMWf1CxhS79ntUDer5IwA/exec";
+const API_URL_KEY = "wf_api_url";
+function getApiUrl(): string {
+  try { return localStorage.getItem(API_URL_KEY) || DEFAULT_API; } catch { return DEFAULT_API; }
+}
 
 const CATS_IN = ["ค่าออกแบบ","ค่าก่อสร้าง","ค่าที่ปรึกษา","ค่างวดโครงการ","รายได้อื่น ๆ"];
 const CATS_EX = ["ค่าวัสดุก่อสร้าง","ค่าแรงงาน","ค่าเช่าเครื่องจักร","ค่าสาธารณูปโภค","เงินเดือนพนักงาน","ค่าเช่าออฟฟิศ","ค่าซอฟต์แวร์/ใบอนุญาต","ค่าการตลาด","ค่าเดินทาง","ค่าใช้จ่ายอื่น ๆ"];
@@ -330,13 +334,13 @@ async function generateDocPDF(kind: "invoice"|"receipt", opts: {
 }
 
 async function apiGet(action: string, params: Record<string,string> = {}) {
-  const url = new URL(API);
+  const url = new URL(getApiUrl());
   url.searchParams.set("action", action);
   Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, v));
   return (await fetch(url.toString())).json();
 }
 async function apiPost(action: string, body: object = {}) {
-  const url = new URL(API);
+  const url = new URL(getApiUrl());
   url.searchParams.set("action", action);
   return (await fetch(url.toString(), { method: "POST", body: JSON.stringify(body) })).json();
 }
@@ -453,6 +457,7 @@ export default function App() {
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState<string|null>(null);
   const [showChangePin, setShowChangePin] = useState(false);
+  const [apiUrlInput, setApiUrlInput] = useState<string>(()=>getApiUrl());
   const [pinChange, setPinChange] = useState<{ step:"old"|"new"|"verify"; oldPin:string; newPin:string; confirmPin:string; code:string; pendingHash:string; codeSent:boolean; codeExpires:number; codeInput:string; lastError:string }>(
     { step:"old", oldPin:"", newPin:"", confirmPin:"", code:"", pendingHash:"", codeSent:false, codeExpires:0, codeInput:"", lastError:"" }
   );
@@ -1809,8 +1814,49 @@ export default function App() {
                   style={{ fontSize:13,padding:"8px 14px",whiteSpace:"nowrap" }}
                 >เปลี่ยน PIN</button>
               </div>
-              <div style={{ padding:"12px 0",fontSize:11,color:"#888",lineHeight:1.5 }}>
+              <div style={{ padding:"12px 0",fontSize:11,color:"#888",lineHeight:1.5,borderBottom:"1px solid #f0f0f0" }}>
                 🔒 PIN จะถูกล็อกอัตโนมัติทุกครั้งที่ออกจากแท็บ "ภาพรวม" — เข้าครั้งถัดไปต้องกรอกใหม่
+              </div>
+              <div style={{ padding:"12px 0" }}>
+                <div style={{ fontSize:14,fontWeight:600 }}>🔗 Apps Script URL</div>
+                <div style={{ fontSize:11,color:"#888",marginTop:2,marginBottom:8 }}>
+                  ถ้าสร้าง deployment ใหม่และได้ URL ใหม่ ให้วาง URL ใหม่ที่นี่ (ปล่อยว่างเพื่อใช้ค่าเริ่มต้น)
+                </div>
+                <input
+                  type="url"
+                  value={apiUrlInput}
+                  onChange={e=>setApiUrlInput(e.target.value)}
+                  placeholder={DEFAULT_API}
+                  style={{ fontSize:12,fontFamily:"monospace" }}
+                />
+                <div style={{ display:"flex",gap:8,marginTop:8 }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={async()=>{
+                      const v = apiUrlInput.trim();
+                      if (!v) { localStorage.removeItem(API_URL_KEY); showToast("กลับไปใช้ URL เริ่มต้น"); setApiUrlInput(DEFAULT_API); return; }
+                      try { new URL(v); } catch { showToast("URL ไม่ถูกต้อง","err"); return; }
+                      localStorage.setItem(API_URL_KEY, v);
+                      // Verify by calling getProjects
+                      setSaving(true);
+                      try {
+                        const res = await apiGet("getProjects");
+                        if (res && res.ok) { showToast("บันทึก URL ใหม่สำเร็จ ✅"); loadAll(); }
+                        else showToast("URL ตอบกลับผิดพลาด: "+(res&&res.error?res.error:"unknown"),"err");
+                      } catch (e) {
+                        console.error("[apiUrl test] error:", e);
+                        showToast("ติดต่อ URL ไม่สำเร็จ","err");
+                      }
+                      setSaving(false);
+                    }}
+                    style={{ flex:1,padding:10,fontSize:13 }}
+                  >บันทึก URL</button>
+                  <button
+                    className="btn btn-ghost"
+                    onClick={()=>{ localStorage.removeItem(API_URL_KEY); setApiUrlInput(DEFAULT_API); showToast("รีเซ็ตเป็น URL เริ่มต้น"); loadAll(); }}
+                    style={{ padding:"10px 14px",fontSize:13 }}
+                  >รีเซ็ต</button>
+                </div>
               </div>
             </div>
 
